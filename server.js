@@ -1,5 +1,6 @@
 const http = require('http');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { URL } = require('url');
 const dbMod = require('./src/db');
@@ -320,6 +321,16 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(`Phetcharat Gold Shop System running at http://localhost:${PORT}`);
+const HOST = process.env.HOST || '0.0.0.0';
+server.listen(PORT, HOST, () => {
+  console.log(`Phetcharat Gold Shop System running at:`);
+  console.log(`  - PC (Local):      http://localhost:${PORT}`);
+  const nets = os.networkInterfaces();
+  for (const [name, addrs] of Object.entries(nets)) {
+    for (const a of addrs || []) {
+      if (a.family === 'IPv4' && !a.internal) {
+        console.log(`  - ${name.padEnd(15)} http://${a.address}:${PORT}`);
+      }
+    }
+  }
 });

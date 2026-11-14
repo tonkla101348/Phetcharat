@@ -931,3 +931,22 @@ body {
 .toast.success {
   border-left-color: #10b981;
 }
+
+@media (max-width: 768px) {
+  .topbar {
+    padding: 12px 14px;
+  }
+  .content {
+    padding: 12px;
+  }
+  .form-row,
+  .form-row-3 {
+    grid-template-columns: 1fr;
+  }
+  .search-input {
+    min-width: 100%;
+  }
+  .modal-backdrop {
+    padding: 8px;
+  }
+}
