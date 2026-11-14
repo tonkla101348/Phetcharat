@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ห้างทองเพชรรัตน์ (Phetcharat) — ระบบจัดการจำนำทอง บัญชี และสต๊อกทอง</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Top Header -->
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-badge">เพชร</div>
+        <div>
+          <h1>ห้างทองเพชรรัตน์ (Phetcharat)</h1>
+          <p id="header-date-label">ระบบจำนำทอง • รายรับ-รายจ่าย 2569 • สต๊อกทอง (Real-Time Sync)</p>
+        </div>
+      </div>
+
+      <div class="quick-actions">
+        <button class="btn btn-gold" onclick="openNewPawnModal()">+ รับจำนำใหม่</button>
+        <button class="btn btn-primary" onclick="openQuickPawnLookup()">ต่อดอก / ไถ่ถอน</button>
+        <button class="btn btn-emerald" onclick="openAccountEntryModal()">+ ลงบัญชีรายรับ-จ่าย</button>
+        <button class="btn btn-outline" onclick="openStockModal()">+ บันทึกสต๊อก</button>
+        <button id="sync-pill" class="sync-pill" onclick="switchTab('sync')" title="ตั้งค่าและดูสถานะเชื่อมต่อ Google Sheets">
+          <span class="sync-dot"></span>
+          <span id="sync-pill-text">กำลังโหลด...</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Navigation Tabs -->
+    <nav class="main-nav">
+      <button class="nav-btn active" data-tab="dashboard" onclick="switchTab('dashboard')">ภาพรวมร้าน & ปี 2569</button>
+      <button class="nav-btn" data-tab="pawn" onclick="switchTab('pawn')">จำนำทอง <span id="nav-badge-pawn" class="nav-badge"></span></button>
+      <button class="nav-btn" data-tab="overdue" onclick="switchTab('overdue')">คนหลุดจำ <span id="nav-badge-overdue" class="nav-badge badge-danger"></span></button>
+      <button class="nav-btn" data-tab="account" onclick="switchTab('account')">บัญชีรายรับ-รายจ่าย</button>
+      <button class="nav-btn" data-tab="stock" onclick="switchTab('stock')">สต๊อกทอง (Stock)</button>
+      <button class="nav-btn" data-tab="sync" onclick="switchTab('sync')">เชื่อมต่อ Google Sheets</button>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="content">
+      <!-- ==================== TAB 1: DASHBOARD ==================== -->
+      <section id="tab-dashboard" class="tab-panel active">
+        <div class="kpi-grid" id="dashboard-kpis"></div>
+
+        <div class="two-col-grid">
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <h2>สรุปยอดวันล่าสุด (<span id="dash-latest-date">-</span>)</h2>
+                <p class="muted">รายรับ-รายจ่าย เงินสดจริง และยอดจำนำสะสม</p>
+              </div>
+              <button class="btn btn-sm btn-outline" onclick="switchTab('account')">เปิดสมุดบัญชี</button>
+            </div>
+            <div id="dash-latest-day-body" class="card-body"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <h2>รายการจำนำเกินกำหนดสูงสุด</h2>
+                <p class="muted">คัดกรองอัตโนมัติตามเงื่อนไขหน้า "คนหลุดจำ"</p>
+              </div>
+              <button class="btn btn-sm btn-danger-outline" onclick="switchTab('overdue')">ดูทั้งหมด</button>
+            </div>
+            <div id="dash-overdue-body" class="card-body"></div>
+          </div>
+        </div>
+
+        <div class="card mt-16">
+          <div class="card-header">
+            <div>
+              <h2>สรุปสต๊อกทองปัจจุบัน (Stock ทอง)</h2>
+              <p class="muted">แยกตามน้ำหนักทองและประเภท (คำนวณน้ำหนักรวมอัตโนมัติ)</p>
+            </div>
+            <button class="btn btn-sm btn-outline" onclick="switchTab('stock')">จัดการสต๊อก 48 ช่อง</button>
+          </div>
+          <div id="dash-stock-summary" class="stock-tier-strip"></div>
+        </div>
+
+        <div class="card mt-16">
+          <div class="card-header">
+            <div>
+              <h2>ภาพรวมรายรับ-รายจ่าย ประจำปี 2569</h2>
+              <p class="muted">เทียบรายเดือนจากชีต "ภาพรวม 2569"</p>
+            </div>
+          </div>
+          <div class="table-wrap" id="dash-annual-table"></div>
+        </div>
+      </section>
+
+      <!-- ==================== TAB 2: PAWN TICKETS ==================== -->
+      <section id="tab-pawn" class="tab-panel">
+        <div class="kpi-grid compact" id="pawn-kpis"></div>
+
+        <div class="card mt-12">
+          <div class="toolbar">
+            <div class="search-box">
+              <input type="text" id="pawn-search" placeholder="ค้นหา เลขที่จำนำ, ชื่อลูกค้า, รายการทอง, หมายเหตุ..." oninput="debouncedLoadPawn()" />
+            </div>
+            <div class="filter-pills">
+              <button class="pill active" data-pawn-status="all" onclick="setPawnStatusFilter('all', this)">ทั้งหมด</button>
+              <button class="pill" data-pawn-status="active" onclick="setPawnStatusFilter('active', this)">จำนำอยู่</button>
+              <button class="pill" data-pawn-status="ontime" onclick="setPawnStatusFilter('ontime', this)">ยังไม่เกินกำหนด</button>
+              <button class="pill pill-danger" data-pawn-status="overdue" onclick="setPawnStatusFilter('overdue', this)">เกินกำหนด</button>
+              <button class="pill" data-pawn-status="redeemed" onclick="setPawnStatusFilter('redeemed', this)">ไถ่แล้ว</button>
+              <button class="pill" data-pawn-status="forfeited" onclick="setPawnStatusFilter('forfeited', this)">หลุดจำ</button>
+            </div>
+            <select id="pawn-sheet-filter" class="select-input" onchange="loadPawnTable()">
+              <option value="all">ทุกเล่ม (4844 + 6001)</option>
+              <option value="เริ่ม 6001">เล่ม เริ่ม 6001</option>
+              <option value="เริ่ม 4844">เล่ม เริ่ม 4844</option>
+            </select>
+            <button class="btn btn-gold" onclick="openNewPawnModal()">+ รับจำนำใหม่</button>
+          </div>
+
+          <div class="table-meta">
+            <span id="pawn-result-count">กำลังโหลด...</span>
+            <div class="pagination-controls">
+              <button class="btn btn-sm btn-outline" id="pawn-prev-btn" onclick="changePawnPage(-1)">ก่อนหน้า</button>
+              <span id="pawn-page-info">หน้า 1</span>
+              <button class="btn btn-sm btn-outline" id="pawn-next-btn" onclick="changePawnPage(1)">ถัดไป</button>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>เลขที่</th>
+                  <th>ชื่อ-สกุล</th>
+                  <th>รายการ</th>
+                  <th class="num">นน.(กรัม)</th>
+                  <th class="num">ยอดจำนำ (฿)</th>
+                  <th class="num">ดอก 2%</th>
+                  <th class="center">กำหนด</th>
+                  <th>วันที่จำ</th>
+                  <th>จ่ายดอกล่าสุด</th>
+                  <th>วันครบกำหนด</th>
+                  <th>สถานะ</th>
+                  <th class="center">จัดการ</th>
+                </tr>
+              </thead>
+              <tbody id="pawn-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== TAB 3: OVERDUE (คนหลุดจำ) ==================== -->
+      <section id="tab-overdue" class="tab-panel">
+        <div class="overdue-banner">
+          <div>
+            <h2>ระบบติดตามรายการจำนำทองเกินกำหนด (คนหลุดจำ)</h2>
+            <p id="overdue-asof">คัดกรองเฉพาะรายการที่ยังไม่ไถ่ถอน ยังไม่หลุดจำ และเกินกำหนดตัดดอก</p>
+          </div>
+          <div class="overdue-search">
+            <input type="text" id="overdue-search" placeholder="ค้นหาชื่อลูกค้า / เลขที่จำนำ..." oninput="debouncedLoadOverdue()" />
+          </div>
+        </div>
+
+        <div class="kpi-grid compact mt-12" id="overdue-kpis"></div>
+
+        <div class="card mt-12">
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>เลขที่จำนำ</th>
+                  <th>ชื่อ-สกุล</th>
+                  <th>รายการ</th>
+                  <th class="num">น้ำหนัก (กรัม)</th>
+                  <th class="num">ยอดเงินต้น (฿)</th>
+                  <th class="num">ดอกเบี้ย/เดือน</th>
+                  <th class="center">กำหนด (เดือน)</th>
+                  <th>จำ / ตัดดอกล่าสุด</th>
+                  <th>วันครบกำหนด</th>
+                  <th class="num">เกินกำหนด</th>
+                  <th class="center">ดำเนินการ</th>
+                </tr>
+              </thead>
+              <tbody id="overdue-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== TAB 4: ACCOUNT LEDGER (รายรับ-รายจ่าย 2569) ==================== -->
+      <section id="tab-account" class="tab-panel">
+        <div class="card">
+          <div class="account-header-bar">
+            <div class="month-tabs" id="account-month-tabs"></div>
+            <div class="account-actions">
+              <button class="btn btn-emerald" onclick="openAccountEntryModal()">+ เพิ่มรายการรายรับ-รายจ่าย</button>
+            </div>
+          </div>
+          <div id="account-month-summary" class="account-month-kpis"></div>
+        </div>
+
+        <div class="card mt-12" id="account-day-jump-bar" style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;gap:12px;flex-wrap:wrap;">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <strong>เลือกดูวันที่:</strong>
+            <select id="account-day-select" class="select-input" onchange="scrollToAccountDay(this.value)"></select>
+            <button class="btn btn-sm btn-outline" onclick="toggleShowAllDays()" id="toggle-all-days-btn">แสดงทุกวันในเดือน</button>
+          </div>
+          <div class="muted" id="account-month-carry-info"></div>
+        </div>
+
+        <div id="account-days-container" class="mt-12"></div>
+      </section>
+
+      <!-- ==================== TAB 5: GOLD STOCK (Stock ทอง) ==================== -->
+      <section id="tab-stock" class="tab-panel">
+        <div class="kpi-grid compact" id="stock-kpis"></div>
+
+        <div class="card mt-12">
+          <div class="card-header">
+            <div>
+              <h2>ตารางสต๊อกทองคงเหลือแยกตามน้ำหนักและประเภท</h2>
+              <p class="muted">คลิกที่ช่องรายการเพื่อบันทึก รับใหม่ / ขาย / ชำรุด สำหรับวันที่เลือก</p>
+            </div>
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+              <label class="muted">วันที่บันทึก:</label>
+              <input type="date" id="stock-date-picker" class="select-input" onchange="loadStockView()" />
+              <button class="btn btn-gold" onclick="openStockModal()">+ บันทึกความเคลื่อนไหว</button>
+            </div>
+          </div>
+
+          <div id="stock-matrix-grid" class="stock-matrix-grid"></div>
+        </div>
+
+        <div class="card mt-16">
+          <div class="card-header">
+            <div>
+              <h2>ประวัติความเคลื่อนไหวสต๊อกรายวัน</h2>
+              <p class="muted">แสดงยอดรับใหม่ / ขาย / ชำรุด และน้ำหนักทองคงเหลือสิ้นวัน</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>วันที่</th>
+                  <th class="num">รับทองเก่า 90 (g)</th>
+                  <th class="num">รับทองเก่า 96.5 (g)</th>
+                  <th class="num">รับใหม่ (ชิ้น)</th>
+                  <th class="num">ขายออก (ชิ้น)</th>
+                  <th class="num">ชำรุด (ชิ้น)</th>
+                  <th class="num">ทองเก่าสะสม (g)</th>
+                  <th class="num">ทองใหม่คงเหลือ (g)</th>
+                  <th class="center">ดูรายละเอียด</th>
+                </tr>
+              </thead>
+              <tbody id="stock-history-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== TAB 6: GOOGLE SHEETS REAL-TIME SYNC ==================== -->
+      <section id="tab-sync" class="tab-panel">
+        <div class="two-col-grid">
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <h2>การเชื่อมต่อ Google Sheets แบบ Real-Time</h2>
+                <p class="muted">ทุกการเพิ่ม/แก้ไขในโปรแกรมจะส่งไปอัปเดตใน Google Sheets ทั้ง 3 ไฟล์ทันที</p>
+              </div>
+            </div>
+            <div class="card-body">
+              <div class="sheet-links-box">
+                <a class="sheet-link-item" href="https://docs.google.com/spreadsheets/d/11YEJCKC34sOunKwn7ny9hYmLyQuDgSxPGW_7LWbaa6M/edit" target="_blank">
+                  <strong>1. จำนำทอง เริ่ม 4818</strong>
+                  <span>เปิดไฟล์ Google Sheets ↗</span>
+                </a>
+                <a class="sheet-link-item" href="https://docs.google.com/spreadsheets/d/1-D5KyzBWZ6a9mt6Ns1iwuUuYgaTidihKPmBw-BMJb8Y/edit" target="_blank">
+                  <strong>2. รายรับรายจ่าย 2569</strong>
+                  <span>เปิดไฟล์ Google Sheets ↗</span>
+                </a>
+                <a class="sheet-link-item" href="https://docs.google.com/spreadsheets/d/1-sm5_U2B7lUdARPFQJmK_-CjtwZnI3cVZpEIsQnK3I8/edit" target="_blank">
+                  <strong>3. Stock ทอง เริ่ม 20/4/69</strong>
+                  <span>เปิดไฟล์ Google Sheets ↗</span>
+                </a>
+              </div>
+
+              <div class="setup-steps mt-16">
+                <h3>วิธีเปิดใช้งานซิงค์อัตโนมัติ (ทำครั้งเดียว 2 นาที)</h3>
+                <ol>
+                  <li>เปิดไฟล์ <strong>จำนำทอง เริ่ม 4818</strong> บน Google Sheets</li>
+                  <li>คลิกเมนู <strong>ส่วนขยาย (Extensions) &rarr; Apps Script</strong></li>
+                  <li>คัดลอกโค้ดด้านขวาไปวางแทนที่ทั้งหมด แล้วกดบันทึก</li>
+                  <li>กดปุ่ม <strong>ทำให้ใช้งานได้ (Deploy) &rarr; การทำให้ใช้งานได้รายการใหม่</strong> เลือกประเภท <strong>เว็บแอป (Web app)</strong></li>
+                  <li>ตั้งค่า Execute as: <strong>Me (ฉัน)</strong> และ Who has access: <strong>Anyone (ทุกคน)</strong> แล้วกด Deploy</li>
+                  <li>นำ URL ที่ได้มาวางในช่องด้านล่าง แล้วกด <strong>บันทึกและทดสอบ</strong></li>
+                </ol>
+              </div>
+
+              <div class="form-group mt-16">
+                <label>Google Apps Script Web App URL</label>
+                <input type="url" id="sync-apps-script-url" placeholder="https://script.google.com/macros/s/.../exec" />
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label>Secret Key (ถ้าตั้งไว้ใน Code.gs)</label>
+                  <input type="text" id="sync-apps-script-secret" placeholder="เว้นว่างได้" />
+                </div>
+                <div class="form-group">
+                  <label>สถานะการซิงค์อัตโนมัติ</label>
+                  <select id="sync-auto-enabled">
+                    <option value="1">เปิดซิงค์อัตโนมัติทันที (Real-Time)</option>
+                    <option value="0">พักการส่งชั่วคราว (เก็บคิวไว้ส่งทีหลัง)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;">
+                <button class="btn btn-gold" onclick="saveSyncConfig()">บันทึกการตั้งค่า</button>
+                <button class="btn btn-outline" onclick="testSyncConnection()">ทดสอบการเชื่อมต่อ</button>
+                <button class="btn btn-primary" onclick="pushSyncQueueNow()">ส่งคิวขึ้น Google Sheets ทันที</button>
+                <button class="btn btn-emerald" onclick="pullFromGoogleSheetsNow()">ดึงข้อมูลล่าสุดจาก Google Sheets (Pull)</button>
+              </div>
+              <div id="sync-feedback-msg" class="mt-12"></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <h2>โค้ด Google Apps Script (Code.gs)</h2>
+                <p class="muted">เตรียมรหัสชีตทั้ง 3 ไฟล์ให้พร้อมแล้ว รักษาสูตรคำนวณเดิมครบถ้วน</p>
+              </div>
+              <button class="btn btn-sm btn-gold" onclick="copyCodeGs()">คัดลอกโค้ดทั้งหมด</button>
+            </div>
+            <div class="card-body">
+              <textarea id="sync-code-gs" class="code-textarea" readonly></textarea>
+            </div>
+          </div>
+        </div>
+
+        <div class="card mt-16">
+          <div class="card-header">
+            <div>
+              <h2>คิวการซิงค์ข้อมูล (Sync Queue)</h2>
+              <p class="muted" id="sync-queue-stats">-</p>
+            </div>
+            <button class="btn btn-sm btn-outline" onclick="loadSyncView()">รีเฟรช</button>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>ชีตเป้าหมาย</th>
+                  <th>คำสั่ง</th>
+                  <th>สถานะ</th>
+                  <th>เวลาที่บันทึก</th>
+                  <th>เวลาที่ซิงค์สำเร็จ</th>
+                  <th>รายละเอียด / ข้อผิดพลาด</th>
+                </tr>
+              </thead>
+              <tbody id="sync-queue-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ==================== MODALS ==================== -->
+  <div id="modal-backdrop" class="modal-backdrop hidden" onclick="closeModalIfBackdrop(event)">
+    <div class="modal-card" id="modal-card">
+      <div class="modal-header">
+        <h3 id="modal-title">-</h3>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

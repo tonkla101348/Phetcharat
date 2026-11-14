@@ -1,0 +1,13 @@
+{
+  "name": "phetcharat-gold-system",
+  "version": "1.0.0",
+  "description": "Phetcharat Gold Shop Management System (Pawn, Account Ledger, Gold Stock) with Real-Time Google Sheets Sync",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "seed": "node -e \"const db = require('./src/db'); db.reseedFromSnapshots(); console.log('Reseeded successfully');\""
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}
