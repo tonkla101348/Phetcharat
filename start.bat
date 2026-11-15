@@ -40,11 +40,18 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo Starting Phetcharat Gold Shop System...
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":3456 " ^| findstr "LISTENING"') do (
-  taskkill /F /PID %%a >nul 2>nul
+(
+  if exist "%~dp0scripts\autoUpdate.js" (
+    echo Checking for updates from GitHub...
+    node "%~dp0scripts\autoUpdate.js"
+  )
+  echo Starting Phetcharat Gold Shop System...
+  for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":3456 " ^| findstr "LISTENING"') do (
+    taskkill /F /PID %%a >nul 2>nul
+  )
+  node server.js --open
+  echo.
+  echo Server stopped.
+  pause
+  exit /b 0
 )
-node server.js --open
-echo.
-echo Server stopped.
-pause
