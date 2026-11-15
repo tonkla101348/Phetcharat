@@ -2,6 +2,7 @@ const http = require('http');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { exec } = require('child_process');
 const { URL } = require('url');
 const dbMod = require('./src/db');
 const syncMod = require('./src/googleSync');
@@ -332,5 +333,8 @@ server.listen(PORT, HOST, () => {
         console.log(`  - ${name.padEnd(15)} http://${a.address}:${PORT}`);
       }
     }
+  }
+  if (process.argv.includes('--open') && process.platform === 'win32') {
+    exec(`start "" "http://localhost:${PORT}"`);
   }
 });
