@@ -888,6 +888,24 @@ function closeModalIfBackdrop(e) {
   if (e.target.id === 'modal-backdrop') closeModal();
 }
 
+const PAWN_NOTE_OPTIONS = [
+  'ชำรุด / ไม่สมบูรณ์ / ไม่มีตะขอ',
+  'สกปรกมาก / เปียก / มีวัสดุอื่น',
+  'ลงยา / มีอัญมณี',
+  'ทอง 90',
+  'ทอง 99',
+];
+
+function renderPawnNoteOptions(selectedNote = '') {
+  const val = String(selectedNote || '').trim();
+  const extra = val && !PAWN_NOTE_OPTIONS.includes(val) ? `<option value="${esc(val)}" selected>${esc(val)}</option>` : '';
+  return [
+    `<option value="" ${!val ? 'selected' : ''}>-- ไม่มีหมายเหตุ --</option>`,
+    ...PAWN_NOTE_OPTIONS.map((opt) => `<option value="${esc(opt)}" ${val === opt ? 'selected' : ''}>${esc(opt)}</option>`),
+    extra,
+  ].join('');
+}
+
 async function openNewPawnModal() {
   let nextNo = '6326';
   try {
@@ -915,13 +933,19 @@ async function openNewPawnModal() {
         <label>ชื่อ-สกุล ลูกค้า *</label>
         <input type="text" id="np-customer" placeholder="ระบุชื่อ-นามสกุลลูกค้า" required autofocus />
       </div>
-      <div class="form-group">
-        <label>รายการทอง *</label>
-        <input type="text" id="np-item" placeholder="เช่น คอ, ข้อมือ, แหวน, กรอบพระเลี่ยมทอง" required />
-        <div class="chip-row">
-          ${['คอ', 'ข้อมือ', 'แหวน', 'จี้ทอง', 'ต่างหู', 'กรอบพระเลี่ยมทอง', 'ทองแท่ง']
-            .map((it) => `<button type="button" class="quick-chip" onclick="appendChip('np-item','${it}')">+ ${it}</button>`)
-            .join('')}
+      <div class="form-row">
+        <div class="form-group">
+          <label>รายการทอง *</label>
+          <input type="text" id="np-item" placeholder="เช่น คอ, ข้อมือ, แหวน, กรอบพระเลี่ยมทอง" required />
+          <div class="chip-row">
+            ${['คอ', 'ข้อมือ', 'แหวน', 'จี้ทอง', 'ต่างหู', 'กรอบพระเลี่ยมทอง', 'ทองแท่ง']
+              .map((it) => `<button type="button" class="quick-chip" onclick="appendChip('np-item','${it}')">+ ${it}</button>`)
+              .join('')}
+          </div>
+        </div>
+        <div class="form-group">
+          <label>จำนวน (ชิ้น)</label>
+          <input type="text" id="np-qty" placeholder="เช่น 1, 2 (ถ้า 1 ชิ้นเว้นว่างได้)" />
         </div>
       </div>
       <div class="form-row-3">
@@ -935,8 +959,10 @@ async function openNewPawnModal() {
           </div>
         </div>
         <div class="form-group">
-          <label>จำนวนชิ้น / หมายเหตุ</label>
-          <input type="text" id="np-note" placeholder="เช่น 2 เส้น / ชำรุด" />
+          <label>หมายเหตุ</label>
+          <select id="np-note">
+            ${renderPawnNoteOptions('')}
+          </select>
         </div>
         <div class="form-group">
           <label>กำหนดตัดดอก (เดือน)</label>
@@ -991,6 +1017,7 @@ async function submitNewPawn(e) {
       pawn_date: document.getElementById('np-date').value,
       customer_name: document.getElementById('np-customer').value.trim(),
       item_desc: document.getElementById('np-item').value.trim(),
+      item_qty: document.getElementById('np-qty')?.value.trim() || '',
       weight_g: Number(document.getElementById('np-weight').value || 0),
       note: document.getElementById('np-note').value.trim(),
       term_raw: document.getElementById('np-term').value,
@@ -1149,7 +1176,12 @@ function renderPawnActionFields(id, defaultDate = getTodayIso()) {
         <div class="form-group"><label>สถานะ (เว้นว่าง = จำนำอยู่)</label><input type="text" id="pa-status" value="${esc(t.status)}" /></div>
         <div class="form-group"><label>วันที่ไถ่ (ถ้ามี)</label><input type="date" id="pa-redeem-date" value="${esc(t.redeem_date)}" /></div>
       </div>
-      <div class="form-group"><label>หมายเหตุ</label><input type="text" id="pa-note" value="${esc(t.note)}" /></div>
+      <div class="form-group">
+        <label>หมายเหตุ</label>
+        <select id="pa-note">
+          ${renderPawnNoteOptions(t.note)}
+        </select>
+      </div>
     `;
   }
 }
