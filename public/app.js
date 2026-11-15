@@ -48,6 +48,50 @@ function fmtThaiLong(iso) {
   return `${Number(m[3])} ${THAI_MONTHS[Number(m[2]) - 1]} ${Number(m[1]) + 543}`;
 }
 
+function fmtDmy(iso) {
+  if (!iso) return 'วว/ดด/ปปปป';
+  const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return iso;
+  return `${m[3]}/${m[2]}/${m[1]}`;
+}
+
+function syncDateInputDisplay(input) {
+  if (!input) return;
+  const wrap = input.closest('.date-dmy-wrap');
+  const disp = wrap ? wrap.querySelector('.date-dmy-display') : null;
+  if (!disp) return;
+  const val = input.value;
+  disp.textContent = fmtDmy(val);
+  disp.classList.toggle('empty', !val);
+}
+
+function initDateInputs(root = document) {
+  root.querySelectorAll('input[type="date"]').forEach((input) => {
+    if (!input.parentElement?.classList.contains('date-dmy-wrap')) {
+      const wrap = document.createElement('div');
+      wrap.className = 'date-dmy-wrap';
+      input.parentNode.insertBefore(wrap, input);
+      wrap.appendChild(input);
+      const disp = document.createElement('span');
+      disp.className = 'date-dmy-display';
+      wrap.appendChild(disp);
+      input.classList.add('dmy-enhanced');
+      input.addEventListener('input', () => syncDateInputDisplay(input));
+      input.addEventListener('change', () => syncDateInputDisplay(input));
+      input.addEventListener('click', () => {
+        if (typeof input.showPicker === 'function') {
+          try {
+            input.showPicker();
+          } catch {
+            // ignore
+          }
+        }
+      });
+    }
+    syncDateInputDisplay(input);
+  });
+}
+
 function getTodayIso() {
   const now = new Date();
   const bkk = new Date(now.getTime() + 7 * 3600 * 1000);
@@ -672,6 +716,7 @@ async function loadStockView() {
   try {
     const picker = document.getElementById('stock-date-picker');
     if (!picker.value) picker.value = getTodayIso();
+    initDateInputs();
     const d = await api(`/api/stock?date=${encodeURIComponent(picker.value)}`);
     state.stockCache = d;
 
@@ -757,7 +802,9 @@ async function loadStockView() {
 }
 
 function jumpStockDate(dateIso) {
-  document.getElementById('stock-date-picker').value = dateIso;
+  const picker = document.getElementById('stock-date-picker');
+  picker.value = dateIso;
+  syncDateInputDisplay(picker);
   loadStockView();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -875,8 +922,10 @@ function copyCodeGs() {
 
 /* ==================== MODALS ==================== */
 function openModal(title, html) {
+  const modalBody = document.getElementById('modal-body');
   document.getElementById('modal-title').textContent = title;
-  document.getElementById('modal-body').innerHTML = html;
+  modalBody.innerHTML = html;
+  initDateInputs(modalBody);
   document.getElementById('modal-backdrop').classList.remove('hidden');
 }
 
@@ -1184,6 +1233,7 @@ function renderPawnActionFields(id, defaultDate = getTodayIso()) {
       </div>
     `;
   }
+  initDateInputs(box);
 }
 
 async function submitPawnAction(e, id) {
@@ -1441,5 +1491,6 @@ async function submitStockModal(e) {
 }
 
 window.addEventListener('DOMContentLoaded', () => {
+  initDateInputs();
   loadDashboard();
 });

@@ -943,6 +943,59 @@ body {
   border-left-color: #10b981;
 }
 
+/* Day/Month/Year (DD/MM/YYYY) Date Input Display */
+.date-dmy-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.form-group .date-dmy-wrap {
+  display: flex;
+  width: 100%;
+}
+
+input[type="date"].dmy-enhanced {
+  color: transparent !important;
+  caret-color: transparent;
+  cursor: pointer;
+  min-width: 150px;
+}
+
+input[type="date"].dmy-enhanced::-webkit-datetime-edit,
+input[type="date"].dmy-enhanced::-webkit-datetime-edit-fields-wrapper,
+input[type="date"].dmy-enhanced::-webkit-datetime-edit-text,
+input[type="date"].dmy-enhanced::-webkit-datetime-edit-month-field,
+input[type="date"].dmy-enhanced::-webkit-datetime-edit-day-field,
+input[type="date"].dmy-enhanced::-webkit-datetime-edit-year-field {
+  color: transparent !important;
+  background: transparent !important;
+}
+
+input[type="date"].dmy-enhanced::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.8;
+}
+
+.date-dmy-display {
+  position: absolute;
+  left: 12px;
+  right: 36px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: var(--text);
+  font-size: 13.5px;
+  font-family: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.date-dmy-display.empty {
+  color: var(--muted);
+}
+
 @media (max-width: 768px) {
   .topbar {
     padding: 12px 14px;
