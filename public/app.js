@@ -347,9 +347,11 @@ async function loadPawnTable() {
             <button class="btn btn-sm btn-primary" onclick="openPawnActionModal(${t.id}, 'pay_interest')">ต่อดอก</button>
             <button class="btn btn-sm btn-emerald" onclick="openPawnActionModal(${t.id}, 'redeem')">ไถ่ถอน</button>
             <button class="btn btn-sm btn-outline" onclick="openPawnActionModal(${t.id}, 'edit')">จัดการ</button>
+            <button class="btn btn-sm btn-danger-outline" onclick="deletePawnTicketConfirm(${t.id}, '${esc(t.ticket_no)}', '${esc(t.customer_name || '')}')">ลบ</button>
           `
           : `
             <button class="btn btn-sm btn-outline" onclick="openPawnActionModal(${t.id}, 'edit')">ดู / แก้ไข</button>
+            <button class="btn btn-sm btn-danger-outline" onclick="deletePawnTicketConfirm(${t.id}, '${esc(t.ticket_no)}', '${esc(t.customer_name || '')}')">ลบ</button>
           `;
 
         return `
@@ -1082,9 +1084,12 @@ function openPawnActionModal(id, defaultAction = 'pay_interest') {
 
     <form onsubmit="submitPawnAction(event, ${t.id})">
       <div id="pa-dynamic-fields"></div>
-      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">
-        <button type="button" class="btn btn-outline" onclick="closeModal()">ยกเลิก</button>
-        <button type="submit" class="btn btn-primary">ยืนยันบันทึก</button>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:14px;">
+        <button type="button" class="btn btn-danger-outline" onclick="deletePawnTicketConfirm(${t.id}, '${esc(t.ticket_no)}', '${esc(t.customer_name || '')}')">ลบรายการจำนำ</button>
+        <div style="display:flex;gap:8px;">
+          <button type="button" class="btn btn-outline" onclick="closeModal()">ยกเลิก</button>
+          <button type="submit" class="btn btn-primary">ยืนยันบันทึก</button>
+        </div>
       </div>
     </form>
   `
@@ -1190,6 +1195,23 @@ async function submitPawnAction(e, id) {
     if (state.activeTab === 'pawn') loadPawnTable();
     else if (state.activeTab === 'overdue') loadOverdueTable();
     else if (state.activeTab === 'dashboard') loadDashboard();
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+async function deletePawnTicketConfirm(id, ticketNo, customerName) {
+  if (!confirm(`ยืนยันลบรายการจำนำเลขที่ ${ticketNo} (${customerName || '-'}) ใช่หรือไม่?\n(รายการบัญชีที่ผูกกับเลขที่จำนำนี้จะถูกลบออกด้วย)`)) {
+    return;
+  }
+  try {
+    await api(`/api/pawn/${id}`, { method: 'DELETE' });
+    closeModal();
+    toast(`ลบรายการจำนำเลขที่ ${ticketNo} เรียบร้อยแล้ว`);
+    if (state.activeTab === 'pawn') loadPawnTable();
+    else if (state.activeTab === 'overdue') loadOverdueTable();
+    else if (state.activeTab === 'dashboard') loadDashboard();
+    else if (state.activeTab === 'account') loadAccountView();
   } catch (err) {
     toast(err.message, 'error');
   }

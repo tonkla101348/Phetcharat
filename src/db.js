@@ -1073,6 +1073,27 @@ function performPawnAction(idOrTicketNo, input) {
   }
 }
 
+function deletePawnTicket(idOrTicket, options = {}) {
+  const row =
+    db.prepare('SELECT * FROM pawn_tickets WHERE id = ?').get(Number(idOrTicket) || -1) ||
+    db.prepare('SELECT * FROM pawn_tickets WHERE ticket_no = ? ORDER BY id DESC LIMIT 1').get(String(idOrTicket));
+  if (!row) {
+    throw new Error(`ไม่พบรายการจำนำ: ${idOrTicket}`);
+  }
+  db.exec('BEGIN');
+  try {
+    db.prepare('DELETE FROM pawn_tickets WHERE id = ?').run(row.id);
+    if (options.delete_linked_account !== false && row.ticket_no) {
+      db.prepare('DELETE FROM account_entries WHERE linked_ticket_no = ?').run(String(row.ticket_no));
+    }
+    db.exec('COMMIT');
+    return { deleted: row };
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
 function computeMonthData(monthRow) {
   const days = db
     .prepare('SELECT * FROM account_days WHERE month_key = ? ORDER BY COALESCE(summary_row, 999999) ASC, date_iso ASC')
@@ -1615,6 +1636,7 @@ module.exports = {
   getNextTicketNo,
   createPawnTicket,
   performPawnAction,
+  deletePawnTicket,
   getAccountMonthView,
   getAccountMonthsSummaryList,
   getAnnualOverview,

@@ -131,6 +131,13 @@ function handlePawnSync(action, p) {
     }
   }
 
+  if (action === 'deletePawnTicket') {
+    if (targetRow >= 2 && targetRow <= lastRow) {
+      sheet.getRange(targetRow, 1, 1, 18).clearContent();
+    }
+    return { deleted: true, sheetName: sheetName, row: targetRow, ticket_no: ticketNoStr };
+  }
+
   if (!targetRow) {
     // Find first empty row in Col A after last non-empty ticket
     var lastDataRow = 1;

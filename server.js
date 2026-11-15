@@ -119,6 +119,14 @@ async function handleApi(req, res, parsedUrl) {
     return sendJson(res, 200, { ok: true, data: result });
   }
 
+  const pawnDeleteMatch = pathname.match(/^\/api\/pawn\/([^/]+)$/);
+  if (method === 'DELETE' && pawnDeleteMatch) {
+    const idOrTicket = decodeURIComponent(pawnDeleteMatch[1]);
+    const result = dbMod.deletePawnTicket(idOrTicket, { delete_linked_account: true });
+    syncMod.enqueueAndSync('pawn', 'deletePawnTicket', result.deleted);
+    return sendJson(res, 200, { ok: true, data: result });
+  }
+
   if (method === 'GET' && pathname === '/api/account') {
     const monthKey = parsedUrl.searchParams.get('month') || '';
     return sendJson(res, 200, { ok: true, data: dbMod.getAccountMonthView(monthKey) });
