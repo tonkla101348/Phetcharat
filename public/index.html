@@ -37,7 +37,7 @@
 
     <!-- Navigation Tabs -->
     <nav class="main-nav">
-      <button class="nav-btn active" data-tab="dashboard" onclick="switchTab('dashboard')">ภาพรวมร้าน & ปี 2569</button>
+      <button class="nav-btn active" data-tab="dashboard" onclick="switchTab('dashboard')">ภาพรวมร้าน & รายปี</button>
       <button class="nav-btn" data-tab="pawn" onclick="switchTab('pawn')">จำนำทอง <span id="nav-badge-pawn" class="nav-badge"></span></button>
       <button class="nav-btn" data-tab="overdue" onclick="switchTab('overdue')">คนหลุดจำ <span id="nav-badge-overdue" class="nav-badge badge-danger"></span></button>
       <button class="nav-btn" data-tab="account" onclick="switchTab('account')">บัญชีรายรับ-รายจ่าย</button>
@@ -89,8 +89,12 @@
         <div class="card mt-16">
           <div class="card-header">
             <div>
-              <h2>ภาพรวมรายรับ-รายจ่าย ประจำปี 2569</h2>
-              <p class="muted">เทียบรายเดือนจากชีต "ภาพรวม 2569"</p>
+              <h2>ภาพรวมรายรับ-รายจ่าย ประจำปี <span id="dash-year-label">2569</span></h2>
+              <p class="muted">เทียบรายเดือนจากสมุดบัญชีรายรับ-รายจ่าย (เลือกปี พ.ศ. ได้)</p>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <label class="muted" for="dash-year-select">ปี พ.ศ.:</label>
+              <select id="dash-year-select" class="select-input" onchange="changeDashboardYear(this.value)"></select>
             </div>
           </div>
           <div class="table-wrap" id="dash-annual-table"></div>
@@ -197,7 +201,10 @@
       <section id="tab-account" class="tab-panel">
         <div class="card">
           <div class="account-header-bar">
-            <div class="month-tabs" id="account-month-tabs"></div>
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+              <select id="account-year-select" class="select-input" onchange="selectAccountYear(this.value)"></select>
+              <div class="month-tabs" id="account-month-tabs"></div>
+            </div>
             <div class="account-actions">
               <button class="btn btn-emerald" onclick="openAccountEntryModal()">+ เพิ่มรายการรายรับ-รายจ่าย</button>
             </div>
@@ -276,7 +283,7 @@
               </div>
             </div>
             <div class="card-body">
-              <div class="sheet-links-box">
+              <div class="sheet-links-box" id="sync-sheet-links-box">
                 <a class="sheet-link-item" href="https://docs.google.com/spreadsheets/d/1_ReGE-qfsq8WYvUoFvLlssuiAVBjiTwrMAuOsdyJjbw/edit" target="_blank">
                   <strong>1. จำนำทอง เริ่ม 4818</strong>
                   <span>เปิดไฟล์ Google Sheets ↗</span>
@@ -319,6 +326,15 @@
                     <option value="0">พักการส่งชั่วคราว (เก็บคิวไว้ส่งทีหลัง)</option>
                   </select>
                 </div>
+              </div>
+
+              <div class="setup-steps mt-12">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+                  <h3 style="margin:0;">สมุดบัญชีรายรับ-รายจ่าย แยกตามปี พ.ศ. (สำหรับขึ้นปีใหม่ 2570, 2571...)</h3>
+                  <button type="button" class="btn btn-sm btn-outline" onclick="addAccountYearSheetRow()">+ เพิ่มชีตปีใหม่ (เช่น 2570)</button>
+                </div>
+                <p class="muted" style="margin-bottom:8px;">สร้าง Google Sheet ใหม่ (เช่น "รายรับรายจ่าย 2570" ที่มีแท็บ Template) แล้ววางลิงก์หรือ Sheet ID ที่นี่ ระบบจะแยกเก็บและซิงค์ตามปีอัตโนมัติ</p>
+                <div id="sync-account-years-list" style="display:grid;gap:8px;"></div>
               </div>
 
               <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;">

@@ -99,7 +99,10 @@ async function sendViaAppsScript(url, secret, item, cfg) {
   } else if (item.action === 'deleteAccountEntry' && !parsed.result?.deleted) {
     const row = Number(payload.sheet_row || 0);
     if (payload.month_key && row >= 4) {
-      await runGsheetsClear(cfg.account_sheet_id || dbMod.SHEET_IDS.account, `'${payload.month_key}'!B${row}:M${row}`);
+      await runGsheetsClear(
+        payload.sheet_id || cfg.account_sheet_id || dbMod.SHEET_IDS.account,
+        `'${payload.month_key}'!B${row}:M${row}`
+      );
     }
   }
 
@@ -366,15 +369,25 @@ async function pullFromGoogleSheets() {
 
   const targets = [
     { id: cfg.pawn_sheet_id || dbMod.SHEET_IDS.pawn, file: path.join(snapDir, 'pawn.xlsx') },
-    { id: cfg.account_sheet_id || dbMod.SHEET_IDS.account, file: path.join(snapDir, 'account.xlsx') },
     { id: cfg.stock_sheet_id || dbMod.SHEET_IDS.stock, file: path.join(snapDir, 'stock.xlsx') },
   ];
+  const accountSheets = dbMod.getAccountSheetsByYear();
+  for (const [yr, sheetId] of Object.entries(accountSheets)) {
+    targets.push({
+      id: sheetId,
+      file: path.join(snapDir, `account_${yr}.xlsx`),
+      legacyCopy: yr === '2569' ? path.join(snapDir, 'account.xlsx') : '',
+    });
+  }
 
   const logs = [];
   for (const t of targets) {
     const tmpFile = `${t.file}.tmp`;
     const via = await downloadSheetXlsx(t.id, tmpFile, cfg);
     fs.renameSync(tmpFile, t.file);
+    if (t.legacyCopy) {
+      fs.copyFileSync(t.file, t.legacyCopy);
+    }
     logs.push(`${path.basename(t.file)} updated (${via})`);
   }
 

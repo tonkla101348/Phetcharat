@@ -1,9 +1,11 @@
 const state = {
   activeTab: 'dashboard',
+  dashboardYear: '',
   pawnStatus: 'all',
   pawnPage: 0,
   pawnLimit: 100,
   pawnTicketsMap: {},
+  accountActiveYear: '',
   accountActiveMonth: '',
   accountShowAllDays: false,
   accountCache: null,
@@ -157,9 +159,15 @@ function updateSyncPill(syncSummary) {
 }
 
 /* ==================== DASHBOARD ==================== */
+function changeDashboardYear(yr) {
+  state.dashboardYear = yr;
+  loadDashboard();
+}
+
 async function loadDashboard() {
   try {
-    const d = await api('/api/dashboard');
+    const qYear = state.dashboardYear ? `?year=${encodeURIComponent(state.dashboardYear)}` : '';
+    const d = await api(`/api/dashboard${qYear}`);
     document.getElementById('header-date-label').textContent = `วันนี้ ${d.todayLong} • ระบบจัดการร้านทองเพชรรัตน์ (ซิงค์ Google Sheets Real-Time)`;
     document.getElementById('nav-badge-pawn').textContent = d.pawnSummary.activeCount.toLocaleString('th-TH');
     document.getElementById('nav-badge-overdue').textContent = d.pawnSummary.overdueCount.toLocaleString('th-TH');
@@ -245,8 +253,19 @@ async function loadDashboard() {
       </div>
     `).join('');
 
-    // Annual overview table (ภาพรวม 2569)
+    // Annual overview table (ภาพรวมประจำปี)
     const ann = d.annualOverview;
+    const activeYr = ann.activeYear || 2569;
+    state.dashboardYear = String(activeYr);
+    const dashYearLabel = document.getElementById('dash-year-label');
+    if (dashYearLabel) dashYearLabel.textContent = activeYr;
+    const dashYearSel = document.getElementById('dash-year-select');
+    if (dashYearSel) {
+      const years = ann.availableYears && ann.availableYears.length ? ann.availableYears : [activeYr];
+      dashYearSel.innerHTML = years
+        .map((y) => `<option value="${y}" ${Number(y) === Number(activeYr) ? 'selected' : ''}>พ.ศ. ${y}</option>`)
+        .join('');
+    }
     const annRows = ann.months.map((m) => `
       <tr style="cursor:pointer" onclick="openAccountMonth('${esc(m.month_key)}')">
         <td><strong>${esc(m.month_key)}</strong></td>
@@ -286,7 +305,7 @@ async function loadDashboard() {
             <th class="num">ยอดจำสะสม</th>
           </tr>
         </thead>
-        <tbody>${annRows}</tbody>
+        <tbody>${annRows || `<tr><td colspan="14" class="center muted">ยังไม่มีข้อมูลบัญชีปี พ.ศ. ${esc(activeYr)}</td></tr>`}</tbody>
         <tfoot>
           <tr class="summary-row">
             <td>รวมทั้งปี</td>
@@ -502,6 +521,7 @@ async function markTicketForfeited(id, ticketNo) {
 
 /* ==================== ACCOUNT LEDGER ==================== */
 function openAccountMonth(monthKey) {
+  state.accountActiveYear = '';
   state.accountActiveMonth = monthKey;
   switchTab('account');
 }
@@ -523,13 +543,35 @@ function scrollToAccountDay(dateIso) {
   if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
+function selectAccountYear(yr) {
+  state.accountActiveYear = yr;
+  state.accountActiveMonth = '';
+  loadAccountView();
+}
+
 async function loadAccountView() {
   try {
-    const q = state.accountActiveMonth ? `?month=${encodeURIComponent(state.accountActiveMonth)}` : '';
-    const data = await api(`/api/account${q}`);
+    const params = new URLSearchParams();
+    if (state.accountActiveMonth) params.set('month', state.accountActiveMonth);
+    if (state.accountActiveYear) params.set('year', state.accountActiveYear);
+    const qs = params.toString();
+    const data = await api(`/api/account${qs ? '?' + qs : ''}`);
     state.accountCache = data;
-    if (!state.accountActiveMonth && data.activeMonth) {
+
+    const activeYear = data.activeYear || 2569;
+    state.accountActiveYear = String(activeYear);
+    if (data.activeMonth) {
       state.accountActiveMonth = data.activeMonth.month.month_key;
+    } else {
+      state.accountActiveMonth = '';
+    }
+
+    const yearSel = document.getElementById('account-year-select');
+    if (yearSel) {
+      const years = data.availableYears && data.availableYears.length ? data.availableYears : [activeYear];
+      yearSel.innerHTML = years
+        .map((y) => `<option value="${y}" ${Number(y) === Number(activeYear) ? 'selected' : ''}>ปี พ.ศ. ${y}</option>`)
+        .join('');
     }
 
     document.getElementById('account-month-tabs').innerHTML = data.months
@@ -545,7 +587,9 @@ async function loadAccountView() {
     const am = data.activeMonth;
     if (!am) {
       document.getElementById('account-month-summary').innerHTML = '';
-      document.getElementById('account-days-container').innerHTML = '<p class="muted">ยังไม่มีข้อมูลเดือนนี้</p>';
+      document.getElementById('account-month-carry-info').textContent = '';
+      document.getElementById('account-day-select').innerHTML = '';
+      document.getElementById('account-days-container').innerHTML = `<div class="card card-body"><p class="muted">ยังไม่มีรายการบัญชีในปี พ.ศ. ${esc(activeYear)} (กดปุ่ม "+ เพิ่มรายการรายรับ-รายจ่าย" เพื่อเริ่มบันทึกรายการแรกของปี)</p></div>`;
       return;
     }
 
@@ -810,6 +854,70 @@ function jumpStockDate(dateIso) {
 }
 
 /* ==================== GOOGLE SHEETS SYNC VIEW ==================== */
+function renderSyncSheetLinks(cfg, accountSheetsByYear) {
+  const box = document.getElementById('sync-sheet-links-box');
+  if (!box) return;
+  const pawnId = cfg.pawn_sheet_id || '1_ReGE-qfsq8WYvUoFvLlssuiAVBjiTwrMAuOsdyJjbw';
+  const stockId = cfg.stock_sheet_id || '1-sm5_U2B7lUdARPFQJmK_-CjtwZnI3cVZpEIsQnK3I8';
+  const years = Object.keys(accountSheetsByYear || {}).sort((a, b) => Number(a) - Number(b));
+  const accLinks = years
+    .map(
+      (yr, idx) => `
+      <a class="sheet-link-item" href="https://docs.google.com/spreadsheets/d/${esc(accountSheetsByYear[yr])}/edit" target="_blank">
+        <strong>${idx + 2}. รายรับรายจ่าย ${esc(yr)}</strong>
+        <span>เปิดไฟล์ Google Sheets ↗</span>
+      </a>`
+    )
+    .join('');
+
+  box.innerHTML = `
+    <a class="sheet-link-item" href="https://docs.google.com/spreadsheets/d/${esc(pawnId)}/edit" target="_blank">
+      <strong>1. จำนำทอง เริ่ม 4818</strong>
+      <span>เปิดไฟล์ Google Sheets ↗</span>
+    </a>
+    ${accLinks}
+    <a class="sheet-link-item" href="https://docs.google.com/spreadsheets/d/${esc(stockId)}/edit" target="_blank">
+      <strong>${years.length + 2}. Stock ทอง เริ่ม 20/4/69</strong>
+      <span>เปิดไฟล์ Google Sheets ↗</span>
+    </a>
+  `;
+}
+
+function collectAccountYearEntries() {
+  const rows = [...document.querySelectorAll('#sync-account-years-list .acc-year-row')];
+  return rows.map((row) => ({
+    year: row.querySelector('.acc-year-num')?.value.trim() || '',
+    sheet: row.querySelector('.acc-year-sheet')?.value.trim() || '',
+  }));
+}
+
+function renderAccountYearRows(entries) {
+  const wrap = document.getElementById('sync-account-years-list');
+  if (!wrap) return;
+  wrap.innerHTML = entries
+    .map(
+      (ent) => `
+      <div class="acc-year-row" style="display:grid;grid-template-columns:100px 1fr auto;gap:8px;align-items:center;">
+        <input type="text" class="acc-year-num" value="${esc(ent.year)}" placeholder="2570" ${ent.year === '2569' ? 'readonly' : ''} style="padding:7px 10px;border:1px solid #d5ccb9;border-radius:8px;font-family:inherit;font-size:13px;" />
+        <input type="text" class="acc-year-sheet" value="${esc(ent.sheet)}" placeholder="วางลิงก์ Google Sheet หรือ Sheet ID ของปี ${esc(ent.year || '2570')}" style="padding:7px 10px;border:1px solid #d5ccb9;border-radius:8px;font-family:inherit;font-size:13px;" />
+        ${
+          ent.year === '2569'
+            ? '<span class="muted" style="font-size:11.5px;padding:0 6px;">ปีหลัก</span>'
+            : '<button type="button" class="btn btn-sm btn-danger-outline" onclick="this.closest(\'.acc-year-row\').remove()">ลบ</button>'
+        }
+      </div>
+    `
+    )
+    .join('');
+}
+
+function addAccountYearSheetRow() {
+  const entries = collectAccountYearEntries();
+  const maxYr = entries.reduce((mx, e) => Math.max(mx, Number(e.year) || 0), 2569);
+  entries.push({ year: String(maxYr + 1), sheet: '' });
+  renderAccountYearRows(entries);
+}
+
 async function loadSyncView() {
   try {
     const d = await api('/api/sync/status');
@@ -818,6 +926,13 @@ async function loadSyncView() {
     document.getElementById('sync-apps-script-secret').value = d.config.apps_script_secret || '';
     document.getElementById('sync-auto-enabled').value = d.config.auto_sync_enabled || '1';
     document.getElementById('sync-code-gs').value = d.codeGs || '';
+
+    const accountSheets = d.accountSheetsByYear || { '2569': d.config.account_sheet_id || '' };
+    const yearEntries = Object.keys(accountSheets)
+      .sort((a, b) => Number(a) - Number(b))
+      .map((yr) => ({ year: yr, sheet: accountSheets[yr] }));
+    renderAccountYearRows(yearEntries);
+    renderSyncSheetLinks(d.config, accountSheets);
 
     const c = d.queue.counts;
     document.getElementById('sync-queue-stats').textContent =
@@ -858,16 +973,24 @@ async function loadSyncView() {
 
 async function saveSyncConfig() {
   try {
+    const accountSheetsByYear = {};
+    for (const ent of collectAccountYearEntries()) {
+      if (/^\d{4}$/.test(ent.year) && ent.sheet) {
+        accountSheetsByYear[ent.year] = ent.sheet;
+      }
+    }
     await api('/api/sync/config', {
       method: 'POST',
       body: JSON.stringify({
         apps_script_url: document.getElementById('sync-apps-script-url').value.trim(),
         apps_script_secret: document.getElementById('sync-apps-script-secret').value.trim(),
         auto_sync_enabled: document.getElementById('sync-auto-enabled').value,
+        account_sheets_by_year: accountSheetsByYear,
       }),
     });
     toast('บันทึกการตั้งค่า Google Sheets แล้ว');
     loadSyncView();
+    loadDashboard();
   } catch (err) {
     toast(err.message, 'error');
   }

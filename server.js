@@ -77,7 +77,8 @@ async function handleApi(req, res, parsedUrl) {
   const method = req.method;
 
   if (method === 'GET' && pathname === '/api/dashboard') {
-    return sendJson(res, 200, { ok: true, data: dbMod.getDashboardSummary() });
+    const year = parsedUrl.searchParams.get('year') || '';
+    return sendJson(res, 200, { ok: true, data: dbMod.getDashboardSummary(year) });
   }
 
   if (method === 'GET' && pathname === '/api/pawn/next-no') {
@@ -136,11 +137,13 @@ async function handleApi(req, res, parsedUrl) {
 
   if (method === 'GET' && pathname === '/api/account') {
     const monthKey = parsedUrl.searchParams.get('month') || '';
-    return sendJson(res, 200, { ok: true, data: dbMod.getAccountMonthView(monthKey) });
+    const year = parsedUrl.searchParams.get('year') || '';
+    return sendJson(res, 200, { ok: true, data: dbMod.getAccountMonthView(monthKey, year) });
   }
 
   if (method === 'GET' && pathname === '/api/account/overview') {
-    return sendJson(res, 200, { ok: true, data: dbMod.getAnnualOverview() });
+    const year = parsedUrl.searchParams.get('year') || '';
+    return sendJson(res, 200, { ok: true, data: dbMod.getAnnualOverview(year) });
   }
 
   if (method === 'POST' && pathname === '/api/account/entry') {
@@ -252,6 +255,7 @@ async function handleApi(req, res, parsedUrl) {
           service_account_json: cfg.service_account_json ? '***configured***' : '',
           has_service_account: Boolean(cfg.service_account_json),
         },
+        accountSheetsByYear: dbMod.getAccountSheetsByYear(),
         queue,
         codeGs: syncMod.getCodeGsSource(),
       },
@@ -267,12 +271,27 @@ async function handleApi(req, res, parsedUrl) {
       'auto_sync_enabled',
       'pawn_sheet_id',
       'account_sheet_id',
+      'account_sheets_by_year_json',
       'stock_sheet_id',
     ];
     const updates = {};
     for (const k of allowedKeys) {
       if (body[k] !== undefined && body[k] !== '***configured***') {
         updates[k] = body[k];
+      }
+    }
+    if (body.account_sheets_by_year && typeof body.account_sheets_by_year === 'object') {
+      const normalized = {};
+      for (const [yr, val] of Object.entries(body.account_sheets_by_year)) {
+        const cleanYr = String(yr).trim();
+        const cleanId = dbMod.extractSheetId(val);
+        if (/^\d{4}$/.test(cleanYr) && cleanId) {
+          normalized[cleanYr] = cleanId;
+        }
+      }
+      updates.account_sheets_by_year_json = JSON.stringify(normalized);
+      if (normalized['2569']) {
+        updates.account_sheet_id = normalized['2569'];
       }
     }
     const cfg = dbMod.setSyncConfig(updates);
@@ -282,6 +301,7 @@ async function handleApi(req, res, parsedUrl) {
         ...cfg,
         service_account_json: cfg.service_account_json ? '***configured***' : '',
         has_service_account: Boolean(cfg.service_account_json),
+        accountSheetsByYear: dbMod.getAccountSheetsByYear(),
       },
     });
   }

@@ -127,11 +127,29 @@ function getMonthKeyForIsoDate(isoDate) {
 
 function getMonthOrderForKey(monthKey, isoDate) {
   if (ACCOUNT_SHEET_ORDER[monthKey]) return ACCOUNT_SHEET_ORDER[monthKey];
+  const s = String(monthKey || '').trim();
+  for (let i = 0; i < THAI_MONTHS_SHORT.length; i++) {
+    const mName = THAI_MONTHS_SHORT[i];
+    const mNoDot = mName.replace(/\.$/, '');
+    if (s.includes(mName) || s.includes(mNoDot)) {
+      const ym = s.match(/(\d{2,4})\s*$/);
+      if (ym) {
+        let beYear = Number(ym[1]);
+        if (beYear < 100) beYear += 2500;
+        return beYear * 100 + (i + 1);
+      }
+    }
+  }
   if (isoDate) {
     const [y, m] = isoDate.split('-').map(Number);
     return (y + 543) * 100 + m;
   }
   return 999999;
+}
+
+function getBeYearForMonthOrder(monthOrder) {
+  if (!monthOrder || monthOrder >= 999999) return 2569;
+  return Math.floor(Number(monthOrder) / 100);
 }
 
 function initSchema() {
@@ -247,6 +265,7 @@ function initSchema() {
   const defaults = {
     pawn_sheet_id: SHEET_IDS.pawn,
     account_sheet_id: SHEET_IDS.account,
+    account_sheets_by_year_json: JSON.stringify({ '2569': SHEET_IDS.account }),
     stock_sheet_id: SHEET_IDS.stock,
     apps_script_url: '',
     apps_script_secret: '',
@@ -595,8 +614,23 @@ function seedStockFromXlsx(filePath) {
 function reseedFromSnapshots() {
   initSchema();
   const pawnFile = path.join(SNAPSHOTS_DIR, 'pawn.xlsx');
-  const accountFile = path.join(SNAPSHOTS_DIR, 'account.xlsx');
+  const legacyAccountFile = path.join(SNAPSHOTS_DIR, 'account.xlsx');
   const stockFile = path.join(SNAPSHOTS_DIR, 'stock.xlsx');
+
+  const sheetsByYear = getAccountSheetsByYear();
+  const yearsSorted = Object.keys(sheetsByYear).sort((a, b) => Number(a) - Number(b));
+  const accountFiles = [];
+  for (const yr of yearsSorted) {
+    const yrFile = path.join(SNAPSHOTS_DIR, `account_${yr}.xlsx`);
+    if (fs.existsSync(yrFile)) {
+      accountFiles.push(yrFile);
+    } else if (yr === '2569' && fs.existsSync(legacyAccountFile)) {
+      accountFiles.push(legacyAccountFile);
+    }
+  }
+  if (accountFiles.length === 0 && fs.existsSync(legacyAccountFile)) {
+    accountFiles.push(legacyAccountFile);
+  }
 
   db.exec('BEGIN');
   try {
@@ -609,7 +643,27 @@ function reseedFromSnapshots() {
       DELETE FROM stock_opening;
     `);
     const pawnCount = fs.existsSync(pawnFile) ? seedPawnFromXlsx(pawnFile) : 0;
-    const accountCount = fs.existsSync(accountFile) ? seedAccountFromXlsx(accountFile) : 0;
+    let accountCount = 0;
+    for (const accFile of accountFiles) {
+      accountCount += seedAccountFromXlsx(accFile);
+    }
+
+    // Link cross-month / cross-year carry-forward balances when a new month starts at 0
+    const allMonthsAsc = db.prepare('SELECT * FROM account_months ORDER BY month_order ASC').all();
+    const updCarry = db.prepare('UPDATE account_months SET carry_cash = ?, carry_pawn = ? WHERE month_key = ?');
+    for (let i = 1; i < allMonthsAsc.length; i++) {
+      const prevM = allMonthsAsc[i - 1];
+      const curM = allMonthsAsc[i];
+      if (Number(curM.carry_cash) === 0 && Number(curM.carry_pawn) === 0) {
+        const prevComputed = computeMonthData(prevM);
+        const carryCash = round2(prevComputed.totals.actual_cash);
+        const carryPawn = round2(prevComputed.totals.cumulative_pawn);
+        updCarry.run(carryCash, carryPawn, curM.month_key);
+        curM.carry_cash = carryCash;
+        curM.carry_pawn = carryPawn;
+      }
+    }
+
     const stockCount = fs.existsSync(stockFile) ? seedStockFromXlsx(stockFile) : 0;
     db.exec('COMMIT');
     return { pawnCount, accountCount, stockCount };
@@ -1258,6 +1312,7 @@ function getAccountMonthsSummaryList() {
     return {
       month_key: m.month_key,
       month_order: m.month_order,
+      be_year: getBeYearForMonthOrder(m.month_order),
       carry_cash: m.carry_cash,
       carry_pawn: m.carry_pawn,
       dayCount: computed.days.length,
@@ -1269,22 +1324,55 @@ function getAccountMonthsSummaryList() {
   });
 }
 
-function getAccountMonthView(monthKey) {
+function getAccountMonthView(monthKey, yearBe) {
   const allMonths = getAccountMonthsSummaryList();
-  const targetKey = monthKey || (allMonths.length ? allMonths[allMonths.length - 1].month_key : 'พ.ย. 69');
-  const monthRow = db.prepare('SELECT * FROM account_months WHERE month_key = ?').get(targetKey);
+  const dataYears = [...new Set(allMonths.map((m) => m.be_year))].sort((a, b) => a - b);
+  const cfgYears = Object.keys(getAccountSheetsByYear()).map((y) => Number(y)).filter(Boolean);
+  const availableYears = [...new Set([...dataYears, ...cfgYears])].sort((a, b) => a - b);
+
+  let targetYear = Number(yearBe) || 0;
+  let targetKey = monthKey || '';
+
+  if (targetKey) {
+    const matched = allMonths.find((m) => m.month_key === targetKey);
+    if (matched) {
+      if (!targetYear) targetYear = matched.be_year;
+      else if (matched.be_year !== targetYear) targetKey = '';
+    } else if (targetYear) {
+      targetKey = '';
+    }
+  }
+
+  if (!targetYear) {
+    targetYear = dataYears.length ? dataYears[dataYears.length - 1] : 2569;
+  }
+
+  const yearMonths = allMonths.filter((m) => m.be_year === targetYear);
+  if (!targetKey) {
+    targetKey = yearMonths.length ? yearMonths[yearMonths.length - 1].month_key : '';
+  }
+
+  const monthRow = targetKey ? db.prepare('SELECT * FROM account_months WHERE month_key = ?').get(targetKey) : null;
   if (!monthRow) {
-    return { months: allMonths, activeMonth: null };
+    return { availableYears, activeYear: targetYear, months: yearMonths, activeMonth: null };
   }
   const computed = computeMonthData(monthRow);
   return {
-    months: allMonths,
+    availableYears,
+    activeYear: targetYear,
+    months: yearMonths,
     activeMonth: computed,
   };
 }
 
-function getAnnualOverview() {
-  const months = getAccountMonthsSummaryList();
+function getAnnualOverview(yearBe) {
+  const allMonths = getAccountMonthsSummaryList();
+  const dataYears = [...new Set(allMonths.map((m) => m.be_year))].sort((a, b) => a - b);
+  const cfgYears = Object.keys(getAccountSheetsByYear()).map((y) => Number(y)).filter(Boolean);
+  const availableYears = [...new Set([...dataYears, ...cfgYears])].sort((a, b) => a - b);
+  const activeYear = Number(yearBe) || (dataYears.length ? dataYears[dataYears.length - 1] : 2569);
+  const months = allMonths.filter((m) => m.be_year === activeYear);
+
   const yearTotals = {
     new_gold_g: 0,
     inc_sell: 0,
@@ -1305,7 +1393,7 @@ function getAnnualOverview() {
       yearTotals[k] = round2(yearTotals[k] + m.totals[k]);
     }
   }
-  return { months, yearTotals };
+  return { availableYears, activeYear, months, yearTotals };
 }
 
 function addAccountEntry(input) {
@@ -1567,14 +1655,67 @@ function setSyncConfig(updates) {
   return getSyncConfig();
 }
 
+function extractSheetId(input) {
+  const s = String(input || '').trim();
+  const m = s.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  return m ? m[1] : s;
+}
+
+function getAccountSheetsByYear() {
+  const cfg = getSyncConfig();
+  let map = {};
+  try {
+    map = JSON.parse(cfg.account_sheets_by_year_json || '{}') || {};
+  } catch {
+    map = {};
+  }
+  const cleaned = {};
+  for (const [yr, val] of Object.entries(map)) {
+    const id = extractSheetId(val);
+    if (/^\d{4}$/.test(String(yr).trim()) && id) {
+      cleaned[String(yr).trim()] = id;
+    }
+  }
+  if (!cleaned['2569']) {
+    cleaned['2569'] = extractSheetId(cfg.account_sheet_id || SHEET_IDS.account);
+  }
+  return cleaned;
+}
+
+function getAccountSheetIdForDate(isoDate, monthKey) {
+  const sheetsByYear = getAccountSheetsByYear();
+  let beYear = '';
+  if (isoDate && /^\d{4}/.test(String(isoDate))) {
+    beYear = String(Number(String(isoDate).slice(0, 4)) + 543);
+  } else if (monthKey) {
+    beYear = String(getBeYearForMonthOrder(getMonthOrderForKey(monthKey)));
+  }
+  return sheetsByYear[beYear] || getSyncConfig().account_sheet_id || SHEET_IDS.account;
+}
+
 function enqueueSync(targetSheet, action, payload) {
+  let finalPayload = payload;
+  if (targetSheet === 'account' && payload && typeof payload === 'object') {
+    const monthKey = payload.month_key || (payload.date_iso ? getMonthKeyForIsoDate(payload.date_iso) : '');
+    const monthRow = monthKey
+      ? db.prepare('SELECT carry_cash, carry_pawn FROM account_months WHERE month_key = ?').get(monthKey)
+      : null;
+    finalPayload = {
+      ...payload,
+      sheet_id: payload.sheet_id || getAccountSheetIdForDate(payload.date_iso, monthKey),
+    };
+    if (monthRow) {
+      finalPayload.carry_cash = monthRow.carry_cash;
+      finalPayload.carry_pawn = monthRow.carry_pawn;
+    }
+  }
   const nowIso = new Date().toISOString();
   const res = db
     .prepare(
       `INSERT INTO sync_queue (target_sheet, action, payload_json, status, created_at)
        VALUES (?, ?, ?, 'pending', ?)`
     )
-    .run(targetSheet, action, JSON.stringify(payload), nowIso);
+    .run(targetSheet, action, JSON.stringify(finalPayload), nowIso);
   return db.prepare('SELECT * FROM sync_queue WHERE id = ?').get(res.lastInsertRowid);
 }
 
@@ -1598,11 +1739,12 @@ function updateSyncQueueItem(id, status, errorMsg = '') {
   );
 }
 
-function getDashboardSummary() {
+function getDashboardSummary(yearBe) {
   const todayIso = getTodayIsoBangkok();
   const pawnData = getPawnTicketsWithOverdue({ limit: 8, overdueOnly: true }, todayIso);
-  const annual = getAnnualOverview();
-  const latestMonthSummary = annual.months.length ? annual.months[annual.months.length - 1] : null;
+  const annual = getAnnualOverview(yearBe);
+  const allMonths = getAccountMonthsSummaryList();
+  const latestMonthSummary = allMonths.length ? allMonths[allMonths.length - 1] : null;
   const activeMonthView = latestMonthSummary ? getAccountMonthView(latestMonthSummary.month_key) : null;
   const latestDays = activeMonthView?.activeMonth?.days || [];
   const latestDay = latestDays.length ? latestDays[latestDays.length - 1] : null;
@@ -1627,6 +1769,7 @@ function getDashboardSummary() {
       lastPullAt: syncConfig.last_pull_at,
       lastPushAt: syncConfig.last_push_at,
       sheetIds: SHEET_IDS,
+      accountSheetsByYear: getAccountSheetsByYear(),
     },
   };
 }
@@ -1655,6 +1798,9 @@ module.exports = {
   upsertStockMovements,
   getSyncConfig,
   setSyncConfig,
+  extractSheetId,
+  getAccountSheetsByYear,
+  getAccountSheetIdForDate,
   enqueueSync,
   getSyncQueue,
   updateSyncQueueItem,

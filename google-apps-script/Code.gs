@@ -182,12 +182,19 @@ function handlePawnSync(action, p) {
 
 /* ==================== 2. ACCOUNT SHEET SYNC ==================== */
 function handleAccountSync(action, p) {
-  var ss = SpreadsheetApp.openById(SHEET_IDS.account);
+  var targetSheetId = p.sheet_id || SHEET_IDS.account;
+  var ss = SpreadsheetApp.openById(targetSheetId);
   var monthKey = p.month_key;
   var sheet = ss.getSheetByName(monthKey);
   if (!sheet) {
     var tpl = ss.getSheetByName('Template') || ss.getSheets()[ss.getSheets().length - 1];
     sheet = tpl.copyTo(ss).setName(monthKey);
+    if (p.carry_cash !== undefined && !sheet.getRange('O3').getFormula()) {
+      sheet.getRange('O3').setValue(Number(p.carry_cash) || 0);
+    }
+    if (p.carry_pawn !== undefined && !sheet.getRange('P3').getFormula()) {
+      sheet.getRange('P3').setValue(Number(p.carry_pawn) || 0);
+    }
   }
 
   var dateIso = p.date_iso;
