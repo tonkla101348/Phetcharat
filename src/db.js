@@ -22,7 +22,7 @@ db.exec('PRAGMA journal_mode = WAL;');
 db.exec('PRAGMA foreign_keys = ON;');
 
 const SHEET_IDS = {
-  pawn: '11YEJCKC34sOunKwn7ny9hYmLyQuDgSxPGW_7LWbaa6M',
+  pawn: '1_ReGE-qfsq8WYvUoFvLlssuiAVBjiTwrMAuOsdyJjbw',
   account: '1-D5KyzBWZ6a9mt6Ns1iwuUuYgaTidihKPmBw-BMJb8Y',
   stock: '1-sm5_U2B7lUdARPFQJmK_-CjtwZnI3cVZpEIsQnK3I8',
 };
