@@ -41,6 +41,9 @@ if errorlevel 1 (
 )
 
 echo Starting Phetcharat Gold Shop System...
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":3456 " ^| findstr "LISTENING"') do (
+  taskkill /F /PID %%a >nul 2>nul
+)
 node server.js --open
 echo.
 echo Server stopped.
