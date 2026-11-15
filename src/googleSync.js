@@ -308,11 +308,61 @@ async function runGsheetsClear(sheetId, rangeA1) {
   }
 }
 
+async function downloadSheetXlsx(fileId, outPath, cfg = {}) {
+  const isZipXlsx = (buf) => buf && buf.length > 100 && buf[0] === 0x50 && buf[1] === 0x4b;
+
+  // 1. Primary: Direct HTTP .xlsx export (works without gdrive CLI or credentials for link-shared sheets)
+  try {
+    const exportUrl = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(fileId)}/export?format=xlsx`;
+    const resp = await fetch(exportUrl, { redirect: 'follow' });
+    if (resp.ok) {
+      const buf = Buffer.from(await resp.arrayBuffer());
+      if (isZipXlsx(buf)) {
+        fs.writeFileSync(outPath, buf);
+        return 'http';
+      }
+    }
+  } catch {
+    // Fall through to Apps Script fallback
+  }
+
+  // 2. Fallback 1: Apps Script Web App export (for restricted/private sheets)
+  const appsScriptUrl = (cfg.apps_script_url || '').trim();
+  if (appsScriptUrl) {
+    try {
+      const resp = await fetch(appsScriptUrl, {
+        method: 'POST',
+        redirect: 'follow',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          secret: cfg.apps_script_secret || '',
+          targetSheet: 'export',
+          action: 'exportXlsx',
+          payload: { sheetId: fileId },
+        }),
+      });
+      const parsed = JSON.parse(await resp.text());
+      if (parsed.ok && parsed.result?.base64) {
+        const buf = Buffer.from(parsed.result.base64, 'base64');
+        if (isZipXlsx(buf)) {
+          fs.writeFileSync(outPath, buf);
+          return 'apps_script';
+        }
+      }
+    } catch {
+      // Fall through to gdrive CLI fallback
+    }
+  }
+
+  // 3. Fallback 2: gdrive CLI export
+  await runGdriveExport(findGdriveExecutable(), fileId, outPath);
+  return 'gdrive';
+}
+
 async function pullFromGoogleSheets() {
   const cfg = dbMod.getSyncConfig();
   const snapDir = path.join(__dirname, '..', 'data', 'snapshots');
   fs.mkdirSync(snapDir, { recursive: true });
-  const gdriveBin = findGdriveExecutable();
 
   const targets = [
     { id: cfg.pawn_sheet_id || dbMod.SHEET_IDS.pawn, file: path.join(snapDir, 'pawn.xlsx') },
@@ -323,9 +373,9 @@ async function pullFromGoogleSheets() {
   const logs = [];
   for (const t of targets) {
     const tmpFile = `${t.file}.tmp`;
-    await runGdriveExport(gdriveBin, t.id, tmpFile);
+    const via = await downloadSheetXlsx(t.id, tmpFile, cfg);
     fs.renameSync(tmpFile, t.file);
-    logs.push(`${path.basename(t.file)} updated`);
+    logs.push(`${path.basename(t.file)} updated (${via})`);
   }
 
   const seeded = dbMod.reseedFromSnapshots();

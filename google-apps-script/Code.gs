@@ -49,6 +49,8 @@ function doPost(e) {
       result = handleAccountSync(action, payload);
     } else if (target === 'stock') {
       result = handleStockSync(action, payload);
+    } else if (target === 'export') {
+      result = handleExportSync(action, payload);
     } else {
       return jsonOut({ ok: false, error: 'Unknown targetSheet: ' + target });
     }
@@ -426,4 +428,19 @@ function handleStockSync(action, p) {
   });
 
   return { baseRow: baseRow, targetRow: targetRow, dateIso: dateIso, moveType: moveType };
+}
+
+/* ==================== 4. XLSX EXPORT BRIDGE ==================== */
+function handleExportSync(action, p) {
+  var sheetId = p.sheetId || SHEET_IDS[p.key] || '';
+  if (!sheetId) throw new Error('Missing sheetId');
+  var url = 'https://docs.google.com/spreadsheets/d/' + encodeURIComponent(sheetId) + '/export?format=xlsx';
+  var resp = UrlFetchApp.fetch(url, {
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+    muteHttpExceptions: true,
+  });
+  if (resp.getResponseCode() !== 200) {
+    throw new Error('Export HTTP ' + resp.getResponseCode());
+  }
+  return { base64: Utilities.base64Encode(resp.getContent()) };
 }
