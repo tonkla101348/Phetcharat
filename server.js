@@ -123,7 +123,14 @@ async function handleApi(req, res, parsedUrl) {
   if (method === 'DELETE' && pawnDeleteMatch) {
     const idOrTicket = decodeURIComponent(pawnDeleteMatch[1]);
     const result = dbMod.deletePawnTicket(idOrTicket, { delete_linked_account: true });
-    syncMod.enqueueAndSync('pawn', 'deletePawnTicket', result.deleted);
+    syncMod.enqueueAndSync('pawn', 'deletePawnTicket', {
+      ticket_no: result.deleted.ticket_no,
+      sheet_name: result.deleted.sheet_name,
+      sheet_row: result.deleted.sheet_row,
+    });
+    for (const acc of result.deletedAccountEntries || []) {
+      syncMod.enqueueAndSync('account', 'deleteAccountEntry', acc);
+    }
     return sendJson(res, 200, { ok: true, data: result });
   }
 
@@ -166,6 +173,7 @@ async function handleApi(req, res, parsedUrl) {
   }
   if (accEntryMatch && method === 'DELETE') {
     const deleted = dbMod.deleteAccountEntry(accEntryMatch[1]);
+    syncMod.enqueueAndSync('account', 'deleteAccountEntry', deleted);
     return sendJson(res, 200, { ok: true, data: deleted });
   }
 

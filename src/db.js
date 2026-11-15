@@ -321,7 +321,10 @@ function seedPawnFromXlsx(filePath) {
         lastPawnDate = parsedJ;
       }
 
-      if ((ticketRaw === null || ticketRaw === undefined || ticketRaw === '') && !customerName && principal === 0) {
+      if (
+        ((ticketRaw === null || ticketRaw === undefined || ticketRaw === '') && !customerName && principal === 0) ||
+        (!customerName && !itemDesc && principal === 0)
+      ) {
         continue;
       }
 
@@ -1082,12 +1085,16 @@ function deletePawnTicket(idOrTicket, options = {}) {
   }
   db.exec('BEGIN');
   try {
+    const deletedAccountEntries =
+      options.delete_linked_account !== false && row.ticket_no
+        ? db.prepare('SELECT * FROM account_entries WHERE linked_ticket_no = ?').all(String(row.ticket_no))
+        : [];
     db.prepare('DELETE FROM pawn_tickets WHERE id = ?').run(row.id);
     if (options.delete_linked_account !== false && row.ticket_no) {
       db.prepare('DELETE FROM account_entries WHERE linked_ticket_no = ?').run(String(row.ticket_no));
     }
     db.exec('COMMIT');
-    return { deleted: row };
+    return { deleted: row, deletedAccountEntries };
   } catch (err) {
     db.exec('ROLLBACK');
     throw err;

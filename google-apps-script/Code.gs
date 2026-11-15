@@ -204,6 +204,29 @@ function handleAccountSync(action, p) {
     return { monthKey: monthKey, summaryRow: summaryRow, dateIso: dateIso };
   }
 
+  if (action === 'deleteAccountEntry') {
+    var delRow = p.sheet_row ? Number(p.sheet_row) : 0;
+    var descStr = String(p.description || p.linked_ticket_no || '').trim();
+    if (delRow >= 4 && delRow <= sheet.getLastRow()) {
+      var curDesc = String(sheet.getRange(delRow, 2).getValue() || '').trim();
+      if (descStr && curDesc !== descStr) delRow = 0;
+    }
+    if (!delRow && summaryRow && descStr) {
+      var blkStart = findDayBlockStartRow(sheet, summaryRow);
+      var bCol = sheet.getRange(blkStart, 2, summaryRow - blkStart, 1).getValues();
+      for (var dIdx = bCol.length - 1; dIdx >= 0; dIdx--) {
+        if (String(bCol[dIdx][0] || '').trim() === descStr) {
+          delRow = blkStart + dIdx;
+          break;
+        }
+      }
+    }
+    if (delRow >= 4) {
+      sheet.getRange(delRow, 2, 1, 12).clearContent();
+    }
+    return { deleted: true, monthKey: monthKey, deletedRow: delRow };
+  }
+
   if (action === 'addAccountEntry') {
     // Find first empty row inside the day block before summaryRow, or insert row above summaryRow
     var blockStart = findDayBlockStartRow(sheet, summaryRow);

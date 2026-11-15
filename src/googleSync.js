@@ -62,7 +62,7 @@ async function getServiceAccountAccessToken(saJsonStr) {
   return cachedAccessToken;
 }
 
-async function sendViaAppsScript(url, secret, item) {
+async function sendViaAppsScript(url, secret, item, cfg) {
   const payload = JSON.parse(item.payload_json || '{}');
   const resp = await fetch(url, {
     method: 'POST',
@@ -85,6 +85,24 @@ async function sendViaAppsScript(url, secret, item) {
   if (!parsed.ok) {
     throw new Error(parsed.error || 'Apps Script sync failed');
   }
+
+  // Fallback: if the user's cloud Apps Script deployment has not been updated yet, clear the row via gsheets CLI
+  if (item.action === 'deletePawnTicket' && !parsed.result?.deleted) {
+    const sheetName =
+      parsed.result?.sheetName ||
+      payload.sheet_name ||
+      (Number(payload.ticket_no) >= 6001 ? 'เริ่ม 6001' : 'เริ่ม 4844');
+    const row = Number(parsed.result?.row || payload.sheet_row || 0);
+    if (row >= 2) {
+      await runGsheetsClear(cfg.pawn_sheet_id || dbMod.SHEET_IDS.pawn, `'${sheetName}'!A${row}:R${row}`);
+    }
+  } else if (item.action === 'deleteAccountEntry' && !parsed.result?.deleted) {
+    const row = Number(payload.sheet_row || 0);
+    if (payload.month_key && row >= 4) {
+      await runGsheetsClear(cfg.account_sheet_id || dbMod.SHEET_IDS.account, `'${payload.month_key}'!B${row}:M${row}`);
+    }
+  }
+
   return parsed.result;
 }
 
@@ -193,7 +211,7 @@ async function processSyncQueue() {
     for (const item of pending) {
       try {
         if (hasAppsScript) {
-          await sendViaAppsScript(cfg.apps_script_url.trim(), cfg.apps_script_secret, item);
+          await sendViaAppsScript(cfg.apps_script_url.trim(), cfg.apps_script_secret, item, cfg);
         } else {
           await sendViaSheetsApiV4(cfg, item);
         }
@@ -222,16 +240,17 @@ function enqueueAndSync(targetSheet, action, payload) {
   return item;
 }
 
-function findGdriveExecutable() {
-  if (process.env.GDRIVE_BIN && fs.existsSync(process.env.GDRIVE_BIN)) {
-    return process.env.GDRIVE_BIN;
+function findPluginCli(envVar, pluginName) {
+  if (process.env[envVar] && fs.existsSync(process.env[envVar])) {
+    return process.env[envVar];
   }
+  const binName = process.platform === 'win32' ? `${pluginName}.cmd` : pluginName;
   const tempRoot = process.env.TEMP || process.env.TMP || '';
   if (tempRoot && fs.existsSync(tempRoot)) {
     try {
       const dirs = fs.readdirSync(tempRoot).filter((d) => d.startsWith('agy-plugin-cli-'));
       for (const d of dirs) {
-        const candidate = path.join(tempRoot, d, 'gdrive.cmd');
+        const candidate = path.join(tempRoot, d, binName);
         if (fs.existsSync(candidate)) return candidate;
       }
     } catch {
@@ -243,31 +262,50 @@ function findGdriveExecutable() {
     '.gemini',
     'config',
     'plugins',
-    'gdrive',
+    pluginName,
     'skills',
-    'gdrive',
+    pluginName,
     'scripts',
-    'gdrive.cmd'
+    binName
   );
   if (fs.existsSync(builtin)) return builtin;
-  return 'gdrive';
+  return pluginName;
+}
+
+function findGdriveExecutable() {
+  return findPluginCli('GDRIVE_BIN', 'gdrive');
+}
+
+function findGsheetsExecutable() {
+  return findPluginCli('GSHEETS_BIN', 'gsheets');
+}
+
+function runCli(bin, args, timeout = 60000) {
+  return new Promise((resolve, reject) => {
+    execFile(bin, args, { shell: process.platform === 'win32', timeout }, (err, stdout, stderr) => {
+      if (err) {
+        reject(new Error(stderr || stdout || err.message));
+      } else {
+        resolve(stdout);
+      }
+    });
+  });
 }
 
 function runGdriveExport(gdriveBin, fileId, outPath) {
-  return new Promise((resolve, reject) => {
-    execFile(
-      gdriveBin,
-      ['readonly', 'export', fileId, outPath, '--format', 'xlsx'],
-      { shell: process.platform === 'win32', timeout: 60000 },
-      (err, stdout, stderr) => {
-        if (err) {
-          reject(new Error(stderr || stdout || err.message));
-        } else {
-          resolve(stdout);
-        }
-      }
+  return runCli(gdriveBin, ['readonly', 'export', fileId, outPath, '--format', 'xlsx']);
+}
+
+async function runGsheetsClear(sheetId, rangeA1) {
+  const gsheetsBin = findGsheetsExecutable();
+  const argRange = process.platform === 'win32' ? `"${rangeA1}"` : rangeA1;
+  try {
+    return await runCli(gsheetsBin, ['mutate', 'clear', sheetId, argRange], 30000);
+  } catch (err) {
+    throw new Error(
+      `กรุณาอัปเดตและ Deploy (New version) โค้ด Code.gs ใน Google Apps Script เพื่อให้รองรับการลบแถวบน Google Sheets (${err.message})`
     );
-  });
+  }
 }
 
 async function pullFromGoogleSheets() {
