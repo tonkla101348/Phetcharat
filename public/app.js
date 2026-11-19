@@ -952,6 +952,118 @@ function renderVatTable() {
   tbody.innerHTML = rowsHtml + blanksHtml;
   initDateInputs(tbody);
   renderVatFooter();
+  renderVatPrintPages();
+}
+
+function renderVatPrintPages() {
+  const container = document.getElementById('vat-print-pages');
+  if (!container) return;
+
+  const ROWS_PER_PAGE = 28;
+  const monthShort = document.getElementById('vat-print-month')?.textContent || '';
+  const yearShort = document.getElementById('vat-print-year')?.textContent || '';
+  const hideRepeatDate = document.getElementById('vat-hide-repeat-date')?.checked;
+  const showTotal = document.getElementById('vat-show-total-row')?.checked;
+  const totals = computeVatTotalsClient();
+
+  const chunks = [];
+  for (let i = 0; i < state.vatRows.length; i += ROWS_PER_PAGE) {
+    chunks.push(state.vatRows.slice(i, i + ROWS_PER_PAGE));
+  }
+  if (chunks.length === 0) chunks.push([]);
+
+  container.innerHTML = chunks
+    .map((chunk, pageIdx) => {
+      const isLastPage = pageIdx === chunks.length - 1;
+      let prevDate = '';
+      const dataRowsHtml = chunk
+        .map((r) => {
+          const dateStr = fmtVatDate(r.date_iso);
+          const printDateStr = hideRepeatDate && r.date_iso === prevDate ? '' : dateStr;
+          prevDate = r.date_iso;
+          const barStr = Number(r.gold_bar_price) ? fmtMoney(r.gold_bar_price) : '';
+          const saleStr = Number(r.sale_amount) ? fmtMoney(r.sale_amount) : '';
+          const exemptStr = Number(r.sale_amount) || Number(r.exempt_base) ? fmtVatDec(r.exempt_base) : '';
+          const taxableStr = Number(r.sale_amount) || Number(r.taxable_base) ? fmtVatDec(r.taxable_base) : '';
+          const vatStr = Number(r.sale_amount) || Number(r.vat_amount) ? fmtVatDec(r.vat_amount) : '';
+
+          return `
+            <tr>
+              <td>${esc(printDateStr)}</td>
+              <td>${esc(r.invoice_no || '')}</td>
+              <td class="num">${esc(barStr)}</td>
+              <td>${esc(r.item_desc || '')}</td>
+              <td class="num">${esc(saleStr)}</td>
+              <td class="num">${esc(exemptStr)}</td>
+              <td class="num">${esc(taxableStr)}</td>
+              <td class="num">${esc(vatStr)}</td>
+            </tr>
+          `;
+        })
+        .join('');
+
+      const blankCount = Math.max(0, ROWS_PER_PAGE - chunk.length);
+      const blanksHtml = Array.from(
+        { length: blankCount },
+        () => '<tr class="vat-print-blank-row"><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>'
+      ).join('');
+
+      const totalHtml =
+        isLastPage && showTotal
+          ? `
+          <tr class="vat-total-row">
+            <td colspan="4" class="center">รวมทั้งสิ้น (${state.vatRows.length} รายการ)</td>
+            <td class="num">${fmtMoney(totals.sale_amount)}</td>
+            <td class="num">${fmtVatDec(totals.exempt_base)}</td>
+            <td class="num">${fmtVatDec(totals.taxable_base)}</td>
+            <td class="num">${fmtVatDec(totals.vat_amount)}</td>
+          </tr>`
+          : '';
+
+      return `
+        <div class="vat-print-page">
+          <div class="vat-doc-header">
+            <div class="vat-doc-title">รายงานภาษีขาย</div>
+            <div class="vat-doc-period">
+              เดือนภาษี <span class="vat-period-blank">${esc(monthShort)}</span>
+              ปี <span class="vat-period-blank">${esc(yearShort)}</span>
+            </div>
+            <div class="vat-company-line">
+              <span>ชื่อผู้ประกอบการ : <strong>บริษัท เพชรรัตน์ (บ้านกรวด) จำกัด</strong></span>
+              <span>เลขประจำตัวผู้เสียภาษีอากร <strong>0315559001675</strong></span>
+            </div>
+            <div class="vat-company-line">
+              <span>ชื่อสถานประกอบการ : <strong>ห้างทองเพชรรัตน์บ้านกรวด &nbsp; สำนักงานใหญ่</strong></span>
+            </div>
+          </div>
+
+          <table class="vat-table">
+            <thead>
+              <tr>
+                <th colspan="2">ใบกำกับภาษีขาย</th>
+                <th rowspan="2" style="width:11%;">ราคาทองแท่ง<br />ต่อบาท</th>
+                <th rowspan="2" style="width:14%;">รายการสินค้า</th>
+                <th rowspan="2" style="width:13%;">รายการขายทอง<br />รูปพรรณ</th>
+                <th rowspan="2" style="width:16%;">มูลค่าของฐานภาษี<br />ที่ไม่ต้องนำมารวม<br />คำนวณ</th>
+                <th rowspan="2" style="width:14%;">มูลค่าของฐานภาษี<br />ที่ต้องเสียภาษี</th>
+                <th rowspan="2" style="width:11%;">ภาษีมูลค่าเพิ่ม</th>
+              </tr>
+              <tr>
+                <th style="width:10%;">วันที่</th>
+                <th style="width:11%;">เล่มที่/เลขที่</th>
+              </tr>
+            </thead>
+            <tbody>${dataRowsHtml}${blanksHtml}${totalHtml}</tbody>
+          </table>
+        </div>
+      `;
+    })
+    .join('');
+}
+
+function printVatReport() {
+  renderVatPrintPages();
+  window.print();
 }
 
 function onVatRowChange(idx, field, val) {
@@ -969,6 +1081,7 @@ function onVatRowChange(idx, field, val) {
     const mapId = field === 'invoice_no' ? `vat-p-inv-${idx}` : field === 'buyer_name' ? `vat-p-buyer-${idx}` : `vat-p-item-${idx}`;
     const el = document.getElementById(mapId);
     if (el) el.textContent = row[field];
+    renderVatPrintPages();
     return;
   }
 
@@ -998,6 +1111,7 @@ function onVatRowChange(idx, field, val) {
   if (cVat) cVat.textContent = Number(row.sale_amount) || Number(row.vat_amount) ? fmtVatDec(row.vat_amount) : '';
 
   renderVatFooter();
+  renderVatPrintPages();
 }
 
 function applyDefaultGoldBarPrice() {
@@ -2009,6 +2123,8 @@ async function submitStockModal(e) {
     toast(err.message, 'error');
   }
 }
+
+window.addEventListener('beforeprint', renderVatPrintPages);
 
 window.addEventListener('DOMContentLoaded', () => {
   initDateInputs();

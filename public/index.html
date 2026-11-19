@@ -242,7 +242,7 @@
               <button type="button" class="btn btn-outline" onclick="openImportVatSalesModal()">ดึงรายการขายทองจากสมุดบัญชี</button>
               <button type="button" class="btn btn-outline" onclick="addVatReportRow()">+ เพิ่มแถว</button>
               <button type="button" class="btn btn-primary" onclick="saveAndSyncVatReport()">บันทึก &amp; ซิงค์ลง Google Sheet (R–Y)</button>
-              <button type="button" class="btn btn-gold" onclick="window.print()">สั่งพิมพ์รายงานภาษีขาย (A4)</button>
+              <button type="button" class="btn btn-gold" onclick="printVatReport()">สั่งพิมพ์รายงานภาษีขาย (A4)</button>
             </div>
           </div>
           <div style="padding:8px 16px;display:flex;gap:18px;align-items:center;flex-wrap:wrap;border-top:1px solid #f0ebe1;font-size:12.5px;">
@@ -258,7 +258,7 @@
           </div>
         </div>
 
-        <div class="vat-paper-sheet mt-12">
+        <div class="vat-paper-sheet screen-only mt-12">
           <div class="vat-doc-header">
             <div class="vat-doc-title">รายงานภาษีขาย</div>
             <div class="vat-doc-period">
@@ -296,6 +296,7 @@
             <tfoot id="vat-tfoot"></tfoot>
           </table>
         </div>
+        <div id="vat-print-pages" class="vat-print-pages"></div>
       </section>
 
       <!-- ==================== TAB 5: GOLD STOCK (Stock ทอง) ==================== -->
