@@ -260,6 +260,25 @@ function initSchema() {
       created_at TEXT NOT NULL,
       synced_at TEXT DEFAULT ''
     );
+
+    CREATE TABLE IF NOT EXISTS vat_sales_rows (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      month_key TEXT NOT NULL,
+      row_order INTEGER NOT NULL DEFAULT 0,
+      date_iso TEXT NOT NULL,
+      invoice_no TEXT DEFAULT '',
+      buyer_name TEXT DEFAULT '',
+      gold_bar_price REAL DEFAULT 0,
+      weight_g REAL DEFAULT 0,
+      item_desc TEXT DEFAULT '',
+      sale_amount REAL DEFAULT 0,
+      exempt_base REAL DEFAULT 0,
+      taxable_base REAL DEFAULT 0,
+      vat_amount REAL DEFAULT 0,
+      linked_entry_id INTEGER,
+      updated_at TEXT DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_vat_sales_month ON vat_sales_rows(month_key, row_order, id);
   `);
 
   const defaults = {
@@ -278,6 +297,7 @@ function initSchema() {
   for (const [k, v] of Object.entries(defaults)) {
     insCfg.run(k, v);
   }
+  seedDefaultNov69VatRowsIfEmpty();
 }
 
 function numVal(cell) {
@@ -538,6 +558,68 @@ function seedAccountFromXlsx(filePath) {
 
       if (hasAnyValue) {
         pendingEntries.push(entry);
+      }
+    }
+
+    // Parse Sales Tax (รายงานภาษีขาย) columns R..Y if present on this month tab
+    const row1Cells = sheet.rows.find((r) => r.r === 1)?.cells || {};
+    if (strVal(row1Cells.R) === 'ใบกำกับภาษีขาย') {
+      const vatRows = [];
+      let lastVatDateIso = '';
+      for (const row of sheet.rows) {
+        if (row.r < 3) continue;
+        const c = row.cells;
+        const parsedDate = normalizeSheetDate(c.R?.v);
+        if (parsedDate) lastVatDateIso = parsedDate;
+        const saleAmt = round2(numVal(c.V));
+        if (saleAmt > 0) {
+          const itemDesc = strVal(c.U);
+          const wgMatch = itemDesc.match(/(\d+(?:\.\d+)?)\s*(?:g|กรัม)/i);
+          const weightG = wgMatch ? round2(Number(wgMatch[1])) : 0;
+          const goldBarPrice = round2(numVal(c.T));
+          const exemptBase = round2(numVal(c.W));
+          const taxableBase = round2(c.X && numVal(c.X) > 0 ? numVal(c.X) : saleAmt - exemptBase);
+          const vatAmt = round2(c.Y && numVal(c.Y) > 0 ? numVal(c.Y) : taxableBase * 0.07);
+          vatRows.push({
+            date_iso: lastVatDateIso || getTodayIsoBangkok(),
+            invoice_no: strVal(c.S),
+            buyer_name: '',
+            gold_bar_price: goldBarPrice,
+            weight_g: weightG,
+            item_desc: itemDesc,
+            sale_amount: saleAmt,
+            exempt_base: exemptBase,
+            taxable_base: taxableBase,
+            vat_amount: vatAmt,
+          });
+        }
+      }
+      if (vatRows.length > 0) {
+        db.prepare('DELETE FROM vat_sales_rows WHERE month_key = ?').run(monthKey);
+        const insVat = db.prepare(`
+          INSERT INTO vat_sales_rows (
+            month_key, row_order, date_iso, invoice_no, buyer_name,
+            gold_bar_price, weight_g, item_desc, sale_amount, exempt_base,
+            taxable_base, vat_amount, linked_entry_id, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+        `);
+        vatRows.forEach((vr, idx) => {
+          insVat.run(
+            monthKey,
+            idx + 1,
+            vr.date_iso,
+            vr.invoice_no,
+            vr.buyer_name,
+            vr.gold_bar_price,
+            vr.weight_g,
+            vr.item_desc,
+            vr.sale_amount,
+            vr.exempt_base,
+            vr.taxable_base,
+            vr.vat_amount,
+            nowIso
+          );
+        });
       }
     }
   }
@@ -1396,6 +1478,212 @@ function getAnnualOverview(yearBe) {
   return { availableYears, activeYear, months, yearTotals };
 }
 
+const DEFAULT_NOV_69_VAT_ROWS = [
+  { date_iso: '2026-11-02', invoice_no: '321 150', buyer_name: '', gold_bar_price: 62250, weight_g: 3.8, item_desc: 'คอ 3.8g', sale_amount: 16600, exempt_base: 15250.96, taxable_base: 1349.04, vat_amount: 94.43 },
+  { date_iso: '2026-11-03', invoice_no: '', buyer_name: '', gold_bar_price: 62800, weight_g: 3.8, item_desc: 'คอ 3.8g', sale_amount: 16800, exempt_base: 15387.40, taxable_base: 1412.60, vat_amount: 98.88 },
+  { date_iso: '2026-11-04', invoice_no: '', buyer_name: '', gold_bar_price: 62600, weight_g: 15.2, item_desc: 'คอ 15.2g', sale_amount: 65400, exempt_base: 61352.52, taxable_base: 4047.48, vat_amount: 283.32 },
+  { date_iso: '2026-11-05', invoice_no: '', buyer_name: '', gold_bar_price: 67350, weight_g: 1.9, item_desc: 'แขน 1.9g', sale_amount: 9000, exempt_base: 8248.79, taxable_base: 751.20, vat_amount: 52.58 },
+  { date_iso: '2026-11-07', invoice_no: '', buyer_name: '', gold_bar_price: 64600, weight_g: 7.6, item_desc: 'คอ 7.6g', sale_amount: 34400, exempt_base: 31654.08, taxable_base: 2745.92, vat_amount: 192.21 },
+  { date_iso: '2026-11-09', invoice_no: '', buyer_name: '', gold_bar_price: 65200, weight_g: 1.9, item_desc: 'แหวน 1.9g', sale_amount: 8900, exempt_base: 7987.42, taxable_base: 912.57, vat_amount: 63.88 },
+  { date_iso: '2026-11-09', invoice_no: '', buyer_name: '', gold_bar_price: 65200, weight_g: 1.9, item_desc: 'แหวน 1.9g', sale_amount: 9100, exempt_base: 7987.42, taxable_base: 1112.58, vat_amount: 77.88 },
+  { date_iso: '2026-11-11', invoice_no: '', buyer_name: '', gold_bar_price: 64150, weight_g: 3.8, item_desc: 'แหวน 3.8g', sale_amount: 17500, exempt_base: 15717.13, taxable_base: 1782.87, vat_amount: 124.80 },
+  { date_iso: '2026-11-11', invoice_no: '', buyer_name: '', gold_bar_price: 64150, weight_g: 3.8, item_desc: 'แหวน 3.8g', sale_amount: 17500, exempt_base: 15717.13, taxable_base: 1782.87, vat_amount: 124.80 },
+  { date_iso: '2026-11-12', invoice_no: '', buyer_name: '', gold_bar_price: 63500, weight_g: 3.8, item_desc: 'คอ 3.8g', sale_amount: 16400, exempt_base: 15557.95, taxable_base: 842.05, vat_amount: 58.94 },
+  { date_iso: '2026-11-13', invoice_no: '', buyer_name: '', gold_bar_price: 62600, weight_g: 15.2, item_desc: 'แขน 15.2g', sale_amount: 64550, exempt_base: 61352.52, taxable_base: 3197.48, vat_amount: 223.82 },
+  { date_iso: '2026-11-13', invoice_no: '', buyer_name: '', gold_bar_price: 61950, weight_g: 3.8, item_desc: 'แหวน 3.8g', sale_amount: 17080, exempt_base: 15178.95, taxable_base: 1901.05, vat_amount: 133.07 },
+  { date_iso: '2026-11-18', invoice_no: '', buyer_name: '', gold_bar_price: 60900, weight_g: 3.8, item_desc: 'แหวน 3.8g', sale_amount: 16200, exempt_base: 14921.23, taxable_base: 1278.77, vat_amount: 89.51 },
+];
+
+function seedDefaultNov69VatRowsIfEmpty() {
+  const existing = db.prepare("SELECT COUNT(*) AS cnt FROM vat_sales_rows WHERE month_key = 'พ.ย. 69'").get();
+  if ((existing?.cnt || 0) > 0) return;
+  const nowIso = new Date().toISOString();
+  const ins = db.prepare(`
+    INSERT INTO vat_sales_rows (
+      month_key, row_order, date_iso, invoice_no, buyer_name,
+      gold_bar_price, weight_g, item_desc, sale_amount, exempt_base,
+      taxable_base, vat_amount, linked_entry_id, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+  `);
+  DEFAULT_NOV_69_VAT_ROWS.forEach((r, idx) => {
+    ins.run(
+      'พ.ย. 69',
+      idx + 1,
+      r.date_iso,
+      r.invoice_no,
+      r.buyer_name,
+      r.gold_bar_price,
+      r.weight_g,
+      r.item_desc,
+      r.sale_amount,
+      r.exempt_base,
+      r.taxable_base,
+      r.vat_amount,
+      nowIso
+    );
+  });
+}
+
+function calcGoldExemptBase(goldBarPrice, weightG) {
+  const bar = Number(goldBarPrice) || 0;
+  const w = Number(weightG) || 0;
+  if (bar <= 0 || w <= 0) return 0;
+  const perGram = Math.round((bar * 0.98) / 15.16);
+  const perBaht = round2(perGram * 15.16);
+  return round2(perBaht * (w / 15.2));
+}
+
+function parseMonthShortAndYearShort(monthKey, activeYear) {
+  const s = String(monthKey || '').trim();
+  let monthShort = '';
+  for (let i = 0; i < THAI_MONTHS_SHORT.length; i++) {
+    const mName = THAI_MONTHS_SHORT[i];
+    const mNoDot = mName.replace(/\.$/, '');
+    if (s.includes(mName) || s.includes(mNoDot)) {
+      monthShort = mName;
+      break;
+    }
+  }
+  const beYear = getBeYearForMonthOrder(getMonthOrderForKey(s)) || Number(activeYear) || 2569;
+  const yearShort = String(beYear).slice(-2);
+  return { monthShort: monthShort || s, yearShort };
+}
+
+function getVatSalesReport(monthKey, yearBe) {
+  initSchema();
+  const accView = getAccountMonthView(monthKey, yearBe);
+  const targetMonthKey =
+    monthKey && db.prepare('SELECT month_key FROM account_months WHERE month_key = ?').get(monthKey)
+      ? monthKey
+      : accView.activeMonth?.month?.month_key || monthKey || (accView.months.length ? accView.months[accView.months.length - 1].month_key : 'พ.ย. 69');
+
+  const rows = db
+    .prepare('SELECT * FROM vat_sales_rows WHERE month_key = ? ORDER BY row_order ASC, date_iso ASC, id ASC')
+    .all(targetMonthKey);
+
+  const candidateSales = db
+    .prepare('SELECT * FROM account_entries WHERE month_key = ? AND inc_sell > 0 ORDER BY date_iso ASC, id ASC')
+    .all(targetMonthKey)
+    .map((e) => ({
+      ...e,
+      date_long: formatThaiDateLong(e.date_iso),
+      is_likely_jewelry: e.new_gold_g > 0 && !/(แท่ง|ออมทอง|หุ้ม|หุ้|เงิน|ครุตุ้ม)/.test(e.description || ''),
+    }));
+
+  const totals = {
+    sale_amount: 0,
+    exempt_base: 0,
+    taxable_base: 0,
+    vat_amount: 0,
+  };
+  for (const r of rows) {
+    totals.sale_amount = round2(totals.sale_amount + (Number(r.sale_amount) || 0));
+    totals.exempt_base = round2(totals.exempt_base + (Number(r.exempt_base) || 0));
+    totals.taxable_base = round2(totals.taxable_base + (Number(r.taxable_base) || 0));
+    totals.vat_amount = round2(totals.vat_amount + (Number(r.vat_amount) || 0));
+  }
+
+  const { monthShort, yearShort } = parseMonthShortAndYearShort(targetMonthKey, accView.activeYear);
+
+  return {
+    availableYears: accView.availableYears,
+    activeYear: accView.activeYear,
+    months: accView.months,
+    monthKey: targetMonthKey,
+    monthShort,
+    yearShort,
+    rows,
+    totals,
+    candidateSales,
+  };
+}
+
+function saveVatSalesReport(monthKey, rowsInput) {
+  initSchema();
+  const targetMonthKey = String(monthKey || '').trim() || getMonthKeyForIsoDate(getTodayIsoBangkok());
+  const rowsArr = Array.isArray(rowsInput) ? rowsInput : [];
+  const nowIso = new Date().toISOString();
+
+  const normalizedRows = [];
+  rowsArr.forEach((r, idx) => {
+    const saleAmt = round2(Number(r.sale_amount) || 0);
+    const goldBarPrice = round2(Number(r.gold_bar_price) || 0);
+    const weightG = round2(Number(r.weight_g) || 0);
+    const hasExplicitExempt = r.exempt_base !== undefined && r.exempt_base !== null && r.exempt_base !== '';
+    const exemptBase = hasExplicitExempt
+      ? round2(Number(r.exempt_base) || 0)
+      : calcGoldExemptBase(goldBarPrice, weightG);
+    const taxableBase = round2(saleAmt - exemptBase);
+    const vatAmt = round2(taxableBase * 0.07);
+    normalizedRows.push({
+      row_order: idx + 1,
+      date_iso: normalizeSheetDate(r.date_iso) || String(r.date_iso || '').trim() || getTodayIsoBangkok(),
+      invoice_no: String(r.invoice_no || '').trim(),
+      buyer_name: String(r.buyer_name || '').trim(),
+      gold_bar_price: goldBarPrice,
+      weight_g: weightG,
+      item_desc: String(r.item_desc || '').trim(),
+      sale_amount: saleAmt,
+      exempt_base: exemptBase,
+      taxable_base: taxableBase,
+      vat_amount: vatAmt,
+      linked_entry_id: r.linked_entry_id ? Number(r.linked_entry_id) : null,
+    });
+  });
+
+  db.exec('BEGIN');
+  try {
+    db.prepare('DELETE FROM vat_sales_rows WHERE month_key = ?').run(targetMonthKey);
+    const ins = db.prepare(`
+      INSERT INTO vat_sales_rows (
+        month_key, row_order, date_iso, invoice_no, buyer_name,
+        gold_bar_price, weight_g, item_desc, sale_amount, exempt_base,
+        taxable_base, vat_amount, linked_entry_id, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    for (const r of normalizedRows) {
+      ins.run(
+        targetMonthKey,
+        r.row_order,
+        r.date_iso,
+        r.invoice_no,
+        r.buyer_name,
+        r.gold_bar_price,
+        r.weight_g,
+        r.item_desc,
+        r.sale_amount,
+        r.exempt_base,
+        r.taxable_base,
+        r.vat_amount,
+        r.linked_entry_id,
+        nowIso
+      );
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+
+  const savedRows = db
+    .prepare('SELECT * FROM vat_sales_rows WHERE month_key = ? ORDER BY row_order ASC, id ASC')
+    .all(targetMonthKey);
+  const totals = {
+    sale_amount: 0,
+    exempt_base: 0,
+    taxable_base: 0,
+    vat_amount: 0,
+  };
+  for (const r of savedRows) {
+    totals.sale_amount = round2(totals.sale_amount + (Number(r.sale_amount) || 0));
+    totals.exempt_base = round2(totals.exempt_base + (Number(r.exempt_base) || 0));
+    totals.taxable_base = round2(totals.taxable_base + (Number(r.taxable_base) || 0));
+    totals.vat_amount = round2(totals.vat_amount + (Number(r.vat_amount) || 0));
+  }
+
+  return { monthKey: targetMonthKey, rows: savedRows, totals };
+}
+
 function addAccountEntry(input) {
   return insertAccountEntryInternal(input);
 }
@@ -1790,6 +2078,9 @@ module.exports = {
   getAccountMonthView,
   getAccountMonthsSummaryList,
   getAnnualOverview,
+  calcGoldExemptBase,
+  getVatSalesReport,
+  saveVatSalesReport,
   addAccountEntry,
   updateAccountEntry,
   deleteAccountEntry,

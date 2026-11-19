@@ -41,6 +41,7 @@
       <button class="nav-btn" data-tab="pawn" onclick="switchTab('pawn')">จำนำทอง <span id="nav-badge-pawn" class="nav-badge"></span></button>
       <button class="nav-btn" data-tab="overdue" onclick="switchTab('overdue')">คนหลุดจำ <span id="nav-badge-overdue" class="nav-badge badge-danger"></span></button>
       <button class="nav-btn" data-tab="account" onclick="switchTab('account')">บัญชีรายรับ-รายจ่าย</button>
+      <button class="nav-btn" data-tab="vat" onclick="switchTab('vat')">รายงานภาษีขาย</button>
       <button class="nav-btn" data-tab="stock" onclick="switchTab('stock')">สต๊อกทอง (Stock)</button>
       <button class="nav-btn" data-tab="sync" onclick="switchTab('sync')">เชื่อมต่อ Google Sheets</button>
     </nav>
@@ -205,7 +206,8 @@
               <select id="account-year-select" class="select-input" onchange="selectAccountYear(this.value)"></select>
               <div class="month-tabs" id="account-month-tabs"></div>
             </div>
-            <div class="account-actions">
+            <div class="account-actions" style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button class="btn btn-outline" onclick="openVatReportForCurrentMonth()">พิมพ์รายงานภาษีขาย (R–Y)</button>
               <button class="btn btn-emerald" onclick="openAccountEntryModal()">+ เพิ่มรายการรายรับ-รายจ่าย</button>
             </div>
           </div>
@@ -222,6 +224,79 @@
         </div>
 
         <div id="account-days-container" class="mt-12"></div>
+      </section>
+
+      <!-- ==================== TAB 4B: SALES TAX REPORT (รายงานภาษีขาย R-Y) ==================== -->
+      <section id="tab-vat" class="tab-panel">
+        <div class="card no-print">
+          <div class="toolbar" style="justify-content:space-between;">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <strong>เดือนภาษี:</strong>
+              <select id="vat-year-select" class="select-input" onchange="selectVatYear(this.value)"></select>
+              <select id="vat-month-select" class="select-input" onchange="selectVatMonth(this.value)"></select>
+              <span class="muted">ราคาทองแท่งตั้งต้น (Col T):</span>
+              <input type="number" step="50" id="vat-default-bar-price" class="select-input" placeholder="เช่น 62600" style="width:120px;" />
+              <button type="button" class="btn btn-sm btn-outline" onclick="applyDefaultGoldBarPrice()">คำนวณฐานภาษียกเว้นจากราคาทองแท่ง</button>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <button type="button" class="btn btn-outline" onclick="openImportVatSalesModal()">ดึงรายการขายทองจากสมุดบัญชี</button>
+              <button type="button" class="btn btn-outline" onclick="addVatReportRow()">+ เพิ่มแถว</button>
+              <button type="button" class="btn btn-primary" onclick="saveAndSyncVatReport()">บันทึก &amp; ซิงค์ลง Google Sheet (R–Y)</button>
+              <button type="button" class="btn btn-gold" onclick="window.print()">สั่งพิมพ์รายงานภาษีขาย (A4)</button>
+            </div>
+          </div>
+          <div style="padding:8px 16px;display:flex;gap:18px;align-items:center;flex-wrap:wrap;border-top:1px solid #f0ebe1;font-size:12.5px;">
+            <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
+              <input type="checkbox" id="vat-hide-repeat-date" checked onchange="renderVatTable()" />
+              ซ่อนวันที่ซ้ำในวันเดียวกันตอนพิมพ์
+            </label>
+            <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
+              <input type="checkbox" id="vat-show-total-row" checked onchange="renderVatTable()" />
+              แสดงแถวรวมท้ายตาราง
+            </label>
+            <span class="muted">สูตรคอลัมน์ R–Y: W = ROUND(ROUND(T×0.98/15.16, 0)×15.16×(นน./15.2), 2) • X = V − W • Y = ROUND(X×7%, 2)</span>
+          </div>
+        </div>
+
+        <div class="vat-paper-sheet mt-12">
+          <div class="vat-doc-header">
+            <div class="vat-doc-title">รายงานภาษีขาย</div>
+            <div class="vat-doc-period">
+              เดือนภาษี <span class="vat-period-blank" id="vat-print-month">พ.ย.</span>
+              ปี <span class="vat-period-blank" id="vat-print-year">69</span>
+            </div>
+            <div class="vat-company-line">
+              <span>ชื่อผู้ประกอบการ : <strong>บริษัท เพชรรัตน์ (บ้านกรวด) จำกัด</strong></span>
+              <span>เลขประจำตัวผู้เสียภาษีอากร <strong>0315559001675</strong></span>
+            </div>
+            <div class="vat-company-line">
+              <span>ชื่อสถานประกอบการ : <strong>ห้างทองเพชรรัตน์บ้านกรวด &nbsp; สำนักงานใหญ่</strong></span>
+            </div>
+          </div>
+
+          <table class="vat-table">
+            <thead>
+              <tr>
+                <th colspan="2">ใบกำกับภาษี</th>
+                <th rowspan="2" style="width:11%;">ชื่อผู้ซื้อ</th>
+                <th rowspan="2" style="width:12%;">รายการสินค้า</th>
+                <th rowspan="2" class="no-print" style="width:90px;">ราคาทองแท่ง/บาท (Col T)</th>
+                <th rowspan="2" class="no-print" style="width:72px;">นน.(g)</th>
+                <th rowspan="2" style="width:13%;">รายการขาย<br />ทองรูปพรรณ</th>
+                <th rowspan="2" style="width:14%;">มูลค่าของฐานภาษี<br />ที่ไม่ต้องนำมารวม<br />คำนวณ</th>
+                <th rowspan="2" style="width:13%;">มูลค่าของฐานภาษี<br />ที่ต้องเสียภาษี</th>
+                <th rowspan="2" style="width:10%;">ภาษีมูลค่าเพิ่ม</th>
+                <th rowspan="2" class="no-print" style="width:46px;">ลบ</th>
+              </tr>
+              <tr>
+                <th style="width:10%;">วันเดือนปี</th>
+                <th style="width:11%;">เล่มที่/เลขที่</th>
+              </tr>
+            </thead>
+            <tbody id="vat-tbody"></tbody>
+            <tfoot id="vat-tfoot"></tfoot>
+          </table>
+        </div>
       </section>
 
       <!-- ==================== TAB 5: GOLD STOCK (Stock ทอง) ==================== -->

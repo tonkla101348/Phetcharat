@@ -996,6 +996,169 @@ input[type="date"].dmy-enhanced::-webkit-calendar-picker-indicator {
   color: var(--muted);
 }
 
+/* ==================== SALES TAX REPORT (รายงานภาษีขาย) ==================== */
+.vat-paper-sheet {
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 24px 26px;
+  max-width: 1180px;
+  margin: 12px auto 0;
+}
+
+.vat-doc-header {
+  color: #111;
+  margin-bottom: 10px;
+}
+
+.vat-doc-title {
+  text-align: center;
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.vat-doc-period {
+  text-align: center;
+  font-size: 14px;
+  margin-bottom: 10px;
+}
+
+.vat-period-blank {
+  display: inline-block;
+  min-width: 72px;
+  border-bottom: 1px dotted #111;
+  text-align: center;
+  font-weight: 700;
+  padding: 0 6px;
+}
+
+.vat-company-line {
+  display: flex;
+  justify-content: flex-start;
+  gap: 28px;
+  flex-wrap: wrap;
+  font-size: 13.5px;
+  margin-bottom: 4px;
+}
+
+.vat-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  color: #111;
+  margin-top: 8px;
+}
+
+.vat-table th,
+.vat-table td {
+  border: 1px solid #222;
+  padding: 4px 6px;
+  vertical-align: middle;
+}
+
+.vat-table th {
+  text-align: center;
+  font-weight: 700;
+  background: #fafafa;
+  line-height: 1.3;
+  font-size: 11.5px;
+}
+
+.vat-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.vat-table td input {
+  width: 100%;
+  padding: 3px 5px;
+  border: 1px solid #d5ccb9;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 12.5px;
+  background: #fffdf8;
+}
+
+.vat-table td input.num {
+  text-align: right;
+}
+
+.vat-table tfoot td {
+  font-weight: 700;
+  background: #f8f6f0;
+}
+
+.print-only {
+  display: none;
+}
+
+.vat-blank-row {
+  display: none;
+  height: 22px;
+}
+
+.vat-blank-row td {
+  height: 22px;
+}
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 10mm 12mm;
+  }
+  body {
+    background: #fff !important;
+    font-size: 11px !important;
+    -webkit-print-color-adjust: exact;
+  }
+  .topbar,
+  .main-nav,
+  .no-print,
+  .toast-container,
+  .modal-backdrop,
+  .tab-panel:not(#tab-vat) {
+    display: none !important;
+  }
+  .content {
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: none !important;
+  }
+  #tab-vat {
+    display: block !important;
+  }
+  .vat-paper-sheet {
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: none !important;
+    width: 100% !important;
+  }
+  .screen-only {
+    display: none !important;
+  }
+  .print-only {
+    display: inline !important;
+  }
+  .vat-blank-row {
+    display: table-row !important;
+  }
+  .vat-table th,
+  .vat-table td {
+    border: 1px solid #000 !important;
+    background: transparent !important;
+    padding: 3px 5px !important;
+    font-size: 10.5px !important;
+  }
+  .vat-table th {
+    font-size: 10px !important;
+  }
+}
+
 @media (max-width: 768px) {
   .topbar {
     padding: 12px 14px;

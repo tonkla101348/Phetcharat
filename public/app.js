@@ -9,6 +9,10 @@ const state = {
   accountActiveMonth: '',
   accountShowAllDays: false,
   accountCache: null,
+  vatActiveYear: '',
+  vatActiveMonth: '',
+  vatCache: null,
+  vatRows: [],
   stockCache: null,
   syncCache: null,
 };
@@ -141,6 +145,7 @@ function switchTab(tabName) {
   else if (tabName === 'pawn') loadPawnTable();
   else if (tabName === 'overdue') loadOverdueTable();
   else if (tabName === 'account') loadAccountView();
+  else if (tabName === 'vat') loadVatView();
   else if (tabName === 'stock') loadStockView();
   else if (tabName === 'sync') loadSyncView();
 }
@@ -750,6 +755,399 @@ async function deleteAccEntry(id) {
     await api(`/api/account/entry/${id}`, { method: 'DELETE' });
     toast('ลบรายการบัญชีแล้ว');
     loadAccountView();
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+/* ==================== SALES TAX REPORT (รายงานภาษีขาย) ==================== */
+function round2Client(n) {
+  return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+}
+
+function calcGoldExemptBaseClient(barPrice, weightG) {
+  const bar = Number(barPrice) || 0;
+  const w = Number(weightG) || 0;
+  if (bar <= 0 || w <= 0) return 0;
+  const perGram = Math.round((bar * 0.98) / 15.16);
+  const perBaht = round2Client(perGram * 15.16);
+  return round2Client(perBaht * (w / 15.2));
+}
+
+function fmtVatDate(iso) {
+  if (!iso) return '';
+  const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return iso;
+  const beShort = String((Number(m[1]) + 543) % 100).padStart(2, '0');
+  return `${Number(m[3])} ${THAI_MONTHS[Number(m[2]) - 1]} ${beShort}`;
+}
+
+function fmtVatDec(n) {
+  const num = Number(n || 0);
+  return num.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function openVatReportForCurrentMonth() {
+  state.vatActiveYear = state.accountActiveYear;
+  state.vatActiveMonth = state.accountActiveMonth;
+  switchTab('vat');
+}
+
+function selectVatYear(yr) {
+  state.vatActiveYear = yr;
+  state.vatActiveMonth = '';
+  loadVatView();
+}
+
+function selectVatMonth(monthKey) {
+  state.vatActiveMonth = monthKey;
+  loadVatView();
+}
+
+async function loadVatView() {
+  try {
+    const params = new URLSearchParams();
+    if (state.vatActiveMonth) params.set('month', state.vatActiveMonth);
+    if (state.vatActiveYear) params.set('year', state.vatActiveYear);
+    const qs = params.toString();
+    const d = await api(`/api/account/vat-report${qs ? '?' + qs : ''}`);
+    state.vatCache = d;
+    state.vatActiveYear = String(d.activeYear || 2569);
+    state.vatActiveMonth = d.monthKey || '';
+    state.vatRows = (d.rows || []).map((r) => ({ ...r }));
+
+    const yrSel = document.getElementById('vat-year-select');
+    if (yrSel) {
+      const years = d.availableYears && d.availableYears.length ? d.availableYears : [state.vatActiveYear];
+      yrSel.innerHTML = years
+        .map((y) => `<option value="${y}" ${Number(y) === Number(state.vatActiveYear) ? 'selected' : ''}>ปี พ.ศ. ${y}</option>`)
+        .join('');
+    }
+    const mSel = document.getElementById('vat-month-select');
+    if (mSel) {
+      mSel.innerHTML = (d.months || [])
+        .map((m) => `<option value="${esc(m.month_key)}" ${m.month_key === state.vatActiveMonth ? 'selected' : ''}>${esc(m.month_key)}</option>`)
+        .join('');
+    }
+    document.getElementById('vat-print-month').textContent = d.monthShort || '';
+    document.getElementById('vat-print-year').textContent = d.yearShort || '';
+    renderVatTable();
+  } catch (err) {
+    toast('โหลดรายงานภาษีขายไม่สำเร็จ: ' + err.message, 'error');
+  }
+}
+
+function computeVatTotalsClient() {
+  const totals = { sale_amount: 0, exempt_base: 0, taxable_base: 0, vat_amount: 0 };
+  for (const r of state.vatRows) {
+    totals.sale_amount = round2Client(totals.sale_amount + (Number(r.sale_amount) || 0));
+    totals.exempt_base = round2Client(totals.exempt_base + (Number(r.exempt_base) || 0));
+    totals.taxable_base = round2Client(totals.taxable_base + (Number(r.taxable_base) || 0));
+    totals.vat_amount = round2Client(totals.vat_amount + (Number(r.vat_amount) || 0));
+  }
+  return totals;
+}
+
+function renderVatFooter() {
+  const tfoot = document.getElementById('vat-tfoot');
+  if (!tfoot) return;
+  const showTotal = document.getElementById('vat-show-total-row')?.checked;
+  if (!showTotal) {
+    tfoot.innerHTML = '';
+    return;
+  }
+  const t = computeVatTotalsClient();
+  tfoot.innerHTML = `
+    <tr>
+      <td colspan="4" class="center">รวมทั้งสิ้น (${state.vatRows.length} รายการ)</td>
+      <td class="no-print"></td>
+      <td class="no-print"></td>
+      <td class="num">${fmtMoney(t.sale_amount)}</td>
+      <td class="num">${fmtVatDec(t.exempt_base)}</td>
+      <td class="num">${fmtVatDec(t.taxable_base)}</td>
+      <td class="num">${fmtVatDec(t.vat_amount)}</td>
+      <td class="no-print"></td>
+    </tr>
+  `;
+}
+
+function renderVatTable() {
+  const tbody = document.getElementById('vat-tbody');
+  if (!tbody) return;
+  const hideRepeatDate = document.getElementById('vat-hide-repeat-date')?.checked;
+  let prevDate = '';
+
+  const rowsHtml = state.vatRows
+    .map((r, idx) => {
+      const dateStr = fmtVatDate(r.date_iso);
+      const printDateStr = hideRepeatDate && r.date_iso === prevDate ? '' : dateStr;
+      prevDate = r.date_iso;
+      const salePrint = Number(r.sale_amount) ? fmtMoney(r.sale_amount) : '';
+      const exemptPrint = Number(r.sale_amount) || Number(r.exempt_base) ? fmtVatDec(r.exempt_base) : '';
+      const taxablePrint = Number(r.sale_amount) || Number(r.taxable_base) ? fmtVatDec(r.taxable_base) : '';
+      const vatPrint = Number(r.sale_amount) || Number(r.vat_amount) ? fmtVatDec(r.vat_amount) : '';
+
+      return `
+        <tr>
+          <td>
+            <div class="screen-only">
+              <input type="date" value="${esc(r.date_iso || '')}" onchange="onVatRowChange(${idx}, 'date_iso', this.value)" />
+            </div>
+            <span class="print-only">${esc(printDateStr)}</span>
+          </td>
+          <td>
+            <div class="screen-only">
+              <input type="text" value="${esc(r.invoice_no || '')}" placeholder="เล่มที่/เลขที่" onchange="onVatRowChange(${idx}, 'invoice_no', this.value)" />
+            </div>
+            <span class="print-only" id="vat-p-inv-${idx}">${esc(r.invoice_no || '')}</span>
+          </td>
+          <td>
+            <div class="screen-only">
+              <input type="text" value="${esc(r.buyer_name || '')}" placeholder="-" onchange="onVatRowChange(${idx}, 'buyer_name', this.value)" />
+            </div>
+            <span class="print-only" id="vat-p-buyer-${idx}">${esc(r.buyer_name || '')}</span>
+          </td>
+          <td>
+            <div class="screen-only">
+              <input type="text" value="${esc(r.item_desc || '')}" placeholder="เช่น คอ 3.8g" onchange="onVatRowChange(${idx}, 'item_desc', this.value)" />
+            </div>
+            <span class="print-only" id="vat-p-item-${idx}">${esc(r.item_desc || '')}</span>
+          </td>
+          <td class="no-print">
+            <input type="number" step="50" class="num" value="${r.gold_bar_price || ''}" placeholder="ราคาทองแท่ง" onchange="onVatRowChange(${idx}, 'gold_bar_price', this.value)" />
+          </td>
+          <td class="no-print">
+            <input type="number" step="0.01" class="num" value="${r.weight_g || ''}" placeholder="กรัม" onchange="onVatRowChange(${idx}, 'weight_g', this.value)" />
+          </td>
+          <td class="num">
+            <div class="screen-only">
+              <input type="number" step="0.01" class="num" value="${r.sale_amount ?? ''}" onchange="onVatRowChange(${idx}, 'sale_amount', this.value)" />
+            </div>
+            <span class="print-only" id="vat-p-sale-${idx}">${esc(salePrint)}</span>
+          </td>
+          <td class="num">
+            <div class="screen-only">
+              <input type="number" step="0.01" class="num" id="vat-in-exempt-${idx}" value="${r.exempt_base ?? ''}" onchange="onVatRowChange(${idx}, 'exempt_base', this.value)" />
+            </div>
+            <span class="print-only" id="vat-p-exempt-${idx}">${esc(exemptPrint)}</span>
+          </td>
+          <td class="num" id="vat-cell-taxable-${idx}">${esc(taxablePrint)}</td>
+          <td class="num" id="vat-cell-vat-${idx}">${esc(vatPrint)}</td>
+          <td class="center no-print">
+            <button type="button" class="btn btn-sm btn-danger-outline" onclick="removeVatReportRow(${idx})">ลบ</button>
+          </td>
+        </tr>
+      `;
+    })
+    .join('');
+
+  const minPrintRows = 28;
+  const blankCount = Math.max(0, minPrintRows - state.vatRows.length);
+  const blanksHtml = Array.from({ length: blankCount }, () => `
+    <tr class="vat-blank-row">
+      <td></td><td></td><td></td><td></td>
+      <td class="no-print"></td><td class="no-print"></td>
+      <td></td><td></td><td></td><td></td>
+      <td class="no-print"></td>
+    </tr>
+  `).join('');
+
+  tbody.innerHTML = rowsHtml + blanksHtml;
+  initDateInputs(tbody);
+  renderVatFooter();
+}
+
+function onVatRowChange(idx, field, val) {
+  const row = state.vatRows[idx];
+  if (!row) return;
+
+  if (field === 'date_iso') {
+    row.date_iso = val;
+    renderVatTable();
+    return;
+  }
+
+  if (field === 'invoice_no' || field === 'buyer_name' || field === 'item_desc') {
+    row[field] = String(val || '').trim();
+    const mapId = field === 'invoice_no' ? `vat-p-inv-${idx}` : field === 'buyer_name' ? `vat-p-buyer-${idx}` : `vat-p-item-${idx}`;
+    const el = document.getElementById(mapId);
+    if (el) el.textContent = row[field];
+    return;
+  }
+
+  const numVal = round2Client(Number(val) || 0);
+  row[field] = numVal;
+
+  if (field === 'gold_bar_price' || field === 'weight_g') {
+    if ((Number(row.gold_bar_price) || 0) > 0 && (Number(row.weight_g) || 0) > 0) {
+      row.exempt_base = calcGoldExemptBaseClient(row.gold_bar_price, row.weight_g);
+      const exIn = document.getElementById(`vat-in-exempt-${idx}`);
+      if (exIn) exIn.value = row.exempt_base;
+    }
+  }
+
+  row.taxable_base = round2Client((Number(row.sale_amount) || 0) - (Number(row.exempt_base) || 0));
+  row.vat_amount = round2Client(row.taxable_base * 0.07);
+
+  const pSale = document.getElementById(`vat-p-sale-${idx}`);
+  const pEx = document.getElementById(`vat-p-exempt-${idx}`);
+  const cTax = document.getElementById(`vat-cell-taxable-${idx}`);
+  const cVat = document.getElementById(`vat-cell-vat-${idx}`);
+  if (pSale) pSale.textContent = Number(row.sale_amount) ? fmtMoney(row.sale_amount) : '';
+  if (pEx) pEx.textContent = Number(row.sale_amount) || Number(row.exempt_base) ? fmtVatDec(row.exempt_base) : '';
+  if (cTax) cTax.textContent = Number(row.sale_amount) || Number(row.taxable_base) ? fmtVatDec(row.taxable_base) : '';
+  if (cVat) cVat.textContent = Number(row.sale_amount) || Number(row.vat_amount) ? fmtVatDec(row.vat_amount) : '';
+
+  renderVatFooter();
+}
+
+function applyDefaultGoldBarPrice() {
+  const barVal = Number(document.getElementById('vat-default-bar-price')?.value || 0);
+  if (barVal <= 0) {
+    toast('กรุณากรอกราคาทองแท่งต่อบาทก่อน (เช่น 62600)', 'error');
+    return;
+  }
+  const hasEmpty = state.vatRows.some((r) => !(Number(r.gold_bar_price) > 0));
+  if (!hasEmpty && state.vatRows.length > 0) {
+    if (!confirm(`ทุกแถวมีราคาทองแท่งอยู่แล้ว ต้องการเปลี่ยนราคาทองแท่งเป็น ${fmtMoney(barVal)} บาท ทั้งหมดและคำนวณใหม่ใช่หรือไม่?`)) {
+      return;
+    }
+  }
+  state.vatRows.forEach((r) => {
+    if (!hasEmpty || !(Number(r.gold_bar_price) > 0)) {
+      r.gold_bar_price = barVal;
+    }
+    if (Number(r.gold_bar_price) > 0 && Number(r.weight_g) > 0) {
+      r.exempt_base = calcGoldExemptBaseClient(r.gold_bar_price, r.weight_g);
+      r.taxable_base = round2Client((Number(r.sale_amount) || 0) - r.exempt_base);
+      r.vat_amount = round2Client(r.taxable_base * 0.07);
+    }
+  });
+  renderVatTable();
+  toast('คำนวณฐานภาษีที่ไม่ต้องนำมารวมคำนวณเรียบร้อย');
+}
+
+function addVatReportRow() {
+  const lastDate = state.vatRows.length ? state.vatRows[state.vatRows.length - 1].date_iso : getTodayIso();
+  const defBar = Number(document.getElementById('vat-default-bar-price')?.value || 0);
+  state.vatRows.push({
+    date_iso: lastDate,
+    invoice_no: '',
+    buyer_name: '',
+    gold_bar_price: defBar,
+    weight_g: 0,
+    item_desc: '',
+    sale_amount: 0,
+    exempt_base: 0,
+    taxable_base: 0,
+    vat_amount: 0,
+  });
+  renderVatTable();
+}
+
+function removeVatReportRow(idx) {
+  state.vatRows.splice(idx, 1);
+  renderVatTable();
+}
+
+function openImportVatSalesModal() {
+  const cands = state.vatCache?.candidateSales || [];
+  const defBar = Number(document.getElementById('vat-default-bar-price')?.value || 62600);
+  const rowsHtml = cands
+    .map(
+      (c, i) => `
+      <tr>
+        <td class="center"><input type="checkbox" class="vat-imp-chk" data-cand-idx="${i}" ${c.is_likely_jewelry ? 'checked' : ''} /></td>
+        <td>${esc(c.date_long)}</td>
+        <td><strong>${esc(c.description || '-')}</strong></td>
+        <td class="num">${c.new_gold_g ? fmtWeight(c.new_gold_g) : '-'}</td>
+        <td class="num"><strong>${fmtMoney(c.inc_sell)}</strong></td>
+      </tr>
+    `
+    )
+    .join('');
+
+  openModal(
+    `ดึงรายการขายทองจากสมุดบัญชี (${state.vatActiveMonth})`,
+    `
+    <div class="info-banner">
+      เลือกรายการขายทองรูปพรรณที่จะนำเข้าในรายงานภาษีขาย (ระบบติ๊กเลือกเฉพาะรายการทองรูปพรรณให้อัตโนมัติ ไม่รวมแท่ง/ออมทอง/เครื่องเงิน)
+    </div>
+    <div class="form-group">
+      <label>ราคาทองแท่งต่อบาทที่ใช้คำนวณเริ่มต้น (ปรับแก้รายแถวทีหลังได้)</label>
+      <input type="number" step="50" id="vat-imp-bar-price" value="${defBar}" />
+    </div>
+    <div class="table-wrap" style="max-height:360px;overflow-y:auto;">
+      <table class="data-table">
+        <thead>
+          <tr><th class="center">เลือก</th><th>วันที่</th><th>รายการ</th><th class="num">น้ำหนัก (g)</th><th class="num">ยอดขาย (฿)</th></tr>
+        </thead>
+        <tbody>${rowsHtml || '<tr><td colspan="5" class="center muted">ไม่พบรายการขาย (ช่อง "ขาย") ในเดือนนี้</td></tr>'}</tbody>
+      </table>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;flex-wrap:wrap;">
+      <button type="button" class="btn btn-outline" onclick="closeModal()">ยกเลิก</button>
+      <button type="button" class="btn btn-outline" onclick="confirmImportVatSales('append')">เพิ่มต่อท้ายรายการเดิม</button>
+      <button type="button" class="btn btn-primary" onclick="confirmImportVatSales('replace')">นำเข้าแทนที่ตารางเดิม</button>
+    </div>
+  `
+  );
+}
+
+function confirmImportVatSales(mode) {
+  const cands = state.vatCache?.candidateSales || [];
+  const barPrice = Number(document.getElementById('vat-imp-bar-price')?.value || 0);
+  const selected = [];
+  document.querySelectorAll('.vat-imp-chk:checked').forEach((chk) => {
+    const c = cands[Number(chk.dataset.candIdx)];
+    if (!c) return;
+    const wG = Number(c.new_gold_g || 0);
+    const saleAmt = Number(c.inc_sell || 0);
+    const exemptBase = barPrice > 0 && wG > 0 ? calcGoldExemptBaseClient(barPrice, wG) : 0;
+    const taxableBase = round2Client(saleAmt - exemptBase);
+    const vatAmt = round2Client(taxableBase * 0.07);
+    const descBase = String(c.description || '').trim();
+    const hasUnit = /\d/.test(descBase);
+    const itemDesc = wG > 0 && !hasUnit ? `${descBase} ${wG}g`.trim() : descBase;
+    selected.push({
+      date_iso: c.date_iso,
+      invoice_no: '',
+      buyer_name: '',
+      gold_bar_price: barPrice,
+      weight_g: wG,
+      item_desc: itemDesc,
+      sale_amount: saleAmt,
+      exempt_base: exemptBase,
+      taxable_base: taxableBase,
+      vat_amount: vatAmt,
+      linked_entry_id: c.id,
+    });
+  });
+
+  if (mode === 'replace') {
+    state.vatRows = selected;
+  } else {
+    state.vatRows = [...state.vatRows, ...selected];
+  }
+  closeModal();
+  renderVatTable();
+  toast(`นำเข้า ${selected.length} รายการลงตารางรายงานภาษีขายแล้ว (อย่าลืมกด "บันทึก & ซิงค์")`);
+}
+
+async function saveAndSyncVatReport() {
+  try {
+    const saved = await api('/api/account/vat-report', {
+      method: 'POST',
+      body: JSON.stringify({
+        month_key: state.vatActiveMonth,
+        date_iso: state.vatRows[0]?.date_iso || getTodayIso(),
+        rows: state.vatRows,
+        sync_sheet: true,
+      }),
+    });
+    state.vatRows = (saved.rows || []).map((r) => ({ ...r }));
+    renderVatTable();
+    toast('บันทึกและส่งรายงานภาษีขาย (คอลัมน์ R–Y) ขึ้น Google Sheet แล้ว');
   } catch (err) {
     toast(err.message, 'error');
   }
