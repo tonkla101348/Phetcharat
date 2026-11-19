@@ -1067,7 +1067,7 @@ function renderVatPrintPages() {
             <thead>
               <tr>
                 <th colspan="2">ใบกำกับภาษีขาย</th>
-                <th rowspan="2" style="width:12%;">ราคาทองรูปพรรณ<br />ต่อบาท</th>
+                <th rowspan="2" style="width:12%;">ราคาทองรูปพรรณ<br />รับซื้อต่อบาท</th>
                 <th rowspan="2" style="width:14%;">รายการสินค้า</th>
                 <th rowspan="2" style="width:13%;">รายการขายทอง<br />รูปพรรณ</th>
                 <th rowspan="2" style="width:16%;">มูลค่าของฐานภาษี<br />ที่ไม่ต้องนำมารวม<br />คำนวณ</th>
@@ -1166,7 +1166,7 @@ function onVatRowChange(idx, field, val) {
 function applyDefaultGoldBarPrice() {
   const barVal = Number(document.getElementById('vat-default-bar-price')?.value || 0);
   if (barVal <= 0) {
-    toast('กรุณากรอกราคาทองรูปพรรณต่อบาทก่อน (เช่น 61352.52)', 'error');
+    toast('กรุณากรอกราคาทองรูปพรรณรับซื้อต่อบาทก่อน (เช่น 61352.52)', 'error');
     return;
   }
   const hasEmpty = state.vatRows.some((r) => !(Number(r.gold_bar_price) > 0));
@@ -1239,7 +1239,7 @@ function openImportVatSalesModal() {
       เลือกรายการขายทองรูปพรรณที่จะนำเข้าในรายงานภาษีขาย (ระบบติ๊กเลือกเฉพาะรายการทองรูปพรรณให้อัตโนมัติ ไม่รวมแท่ง/ออมทอง/เครื่องเงิน)
     </div>
     <div class="form-group">
-      <label>ราคาทองรูปพรรณต่อบาทที่ใช้คำนวณเริ่มต้น (ปรับแก้รายแถวทีหลังได้)</label>
+      <label>ราคาทองรูปพรรณรับซื้อต่อบาทที่ใช้คำนวณเริ่มต้น (ปรับแก้รายแถวทีหลังได้)</label>
       <input type="number" step="0.01" id="vat-imp-bar-price" value="${esc(defBar)}" placeholder="เว้นว่างไว้เพื่อดึงราคาปิดวันตามวันที่อัตโนมัติ" />
       <label style="display:inline-flex;align-items:center;gap:6px;margin-top:8px;font-weight:400;cursor:pointer;">
         <input type="checkbox" id="vat-imp-auto-fetch" checked />
