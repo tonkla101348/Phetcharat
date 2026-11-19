@@ -774,6 +774,15 @@ function calcGoldExemptBaseClient(barPrice, weightG) {
   return round2Client(perBaht * (w / 15.2));
 }
 
+function extractWeightFromDesc(desc) {
+  const s = String(desc || '').trim();
+  const mUnit = s.match(/(\d+(?:\.\d+)?)\s*(?:g|กรัม)/i);
+  if (mUnit) return round2Client(Number(mUnit[1]) || 0);
+  const mEnd = s.match(/(\d+(?:\.\d+)?)\s*$/);
+  if (mEnd) return round2Client(Number(mEnd[1]) || 0);
+  return 0;
+}
+
 function fmtVatDate(iso) {
   if (!iso) return '';
   const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -860,7 +869,6 @@ function renderVatFooter() {
   tfoot.innerHTML = `
     <tr>
       <td colspan="4" class="center">รวมทั้งสิ้น (${state.vatRows.length} รายการ)</td>
-      <td class="no-print"></td>
       <td class="num">${fmtMoney(t.sale_amount)}</td>
       <td class="num">${fmtVatDec(t.exempt_base)}</td>
       <td class="num">${fmtVatDec(t.taxable_base)}</td>
@@ -914,9 +922,6 @@ function renderVatTable() {
             </div>
             <span class="print-only" id="vat-p-item-${idx}">${esc(r.item_desc || '')}</span>
           </td>
-          <td class="no-print">
-            <input type="number" step="0.01" class="num" value="${r.weight_g || ''}" placeholder="กรัม" onchange="onVatRowChange(${idx}, 'weight_g', this.value)" />
-          </td>
           <td class="num">
             <div class="screen-only">
               <input type="number" step="0.01" class="num" value="${r.sale_amount ?? ''}" onchange="onVatRowChange(${idx}, 'sale_amount', this.value)" />
@@ -944,7 +949,6 @@ function renderVatTable() {
   const blanksHtml = Array.from({ length: blankCount }, () => `
     <tr class="vat-blank-row">
       <td></td><td></td><td></td><td></td>
-      <td class="no-print"></td>
       <td></td><td></td><td></td><td></td>
       <td class="no-print"></td>
     </tr>
@@ -1078,27 +1082,45 @@ function onVatRowChange(idx, field, val) {
     return;
   }
 
-  if (field === 'invoice_no' || field === 'buyer_name' || field === 'item_desc') {
+  if (field === 'invoice_no' || field === 'buyer_name') {
     row[field] = String(val || '').trim();
-    const mapId = field === 'invoice_no' ? `vat-p-inv-${idx}` : field === 'buyer_name' ? `vat-p-buyer-${idx}` : `vat-p-item-${idx}`;
+    const mapId = field === 'invoice_no' ? `vat-p-inv-${idx}` : `vat-p-buyer-${idx}`;
     const el = document.getElementById(mapId);
     if (el) el.textContent = row[field];
     renderVatPrintPages();
     return;
   }
 
-  const numVal = round2Client(Number(val) || 0);
-  row[field] = numVal;
-
-  if (field === 'gold_bar_price' || field === 'weight_g') {
+  if (field === 'item_desc') {
+    row.item_desc = String(val || '').trim();
+    const el = document.getElementById(`vat-p-item-${idx}`);
+    if (el) el.textContent = row.item_desc;
+    const parsedW = extractWeightFromDesc(row.item_desc);
+    if (parsedW > 0) {
+      row.weight_g = parsedW;
+    }
     if ((Number(row.gold_bar_price) || 0) > 0 && (Number(row.weight_g) || 0) > 0) {
       row.exempt_base = calcGoldExemptBaseClient(row.gold_bar_price, row.weight_g);
       const exIn = document.getElementById(`vat-in-exempt-${idx}`);
       if (exIn) exIn.value = row.exempt_base;
-    } else if (field === 'gold_bar_price' && numVal <= 0) {
-      row.exempt_base = 0;
-      const exIn = document.getElementById(`vat-in-exempt-${idx}`);
-      if (exIn) exIn.value = '';
+    }
+  } else {
+    const numVal = round2Client(Number(val) || 0);
+    row[field] = numVal;
+
+    if (field === 'gold_bar_price') {
+      if (!(Number(row.weight_g) > 0)) {
+        row.weight_g = extractWeightFromDesc(row.item_desc);
+      }
+      if (numVal > 0 && (Number(row.weight_g) || 0) > 0) {
+        row.exempt_base = calcGoldExemptBaseClient(row.gold_bar_price, row.weight_g);
+        const exIn = document.getElementById(`vat-in-exempt-${idx}`);
+        if (exIn) exIn.value = row.exempt_base;
+      } else if (numVal <= 0) {
+        row.exempt_base = 0;
+        const exIn = document.getElementById(`vat-in-exempt-${idx}`);
+        if (exIn) exIn.value = '';
+      }
     }
   }
 
@@ -1136,6 +1158,9 @@ function applyDefaultGoldBarPrice() {
   state.vatRows.forEach((r) => {
     if (!hasEmpty || !(Number(r.gold_bar_price) > 0)) {
       r.gold_bar_price = barVal;
+    }
+    if (!(Number(r.weight_g) > 0)) {
+      r.weight_g = extractWeightFromDesc(r.item_desc);
     }
     if (Number(r.gold_bar_price) > 0 && Number(r.weight_g) > 0) {
       r.exempt_base = calcGoldExemptBaseClient(r.gold_bar_price, r.weight_g);
