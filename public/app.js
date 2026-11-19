@@ -861,7 +861,6 @@ function renderVatFooter() {
     <tr>
       <td colspan="4" class="center">รวมทั้งสิ้น (${state.vatRows.length} รายการ)</td>
       <td class="no-print"></td>
-      <td class="no-print"></td>
       <td class="num">${fmtMoney(t.sale_amount)}</td>
       <td class="num">${fmtVatDec(t.exempt_base)}</td>
       <td class="num">${fmtVatDec(t.taxable_base)}</td>
@@ -882,6 +881,7 @@ function renderVatTable() {
       const dateStr = fmtVatDate(r.date_iso);
       const printDateStr = hideRepeatDate && r.date_iso === prevDate ? '' : dateStr;
       prevDate = r.date_iso;
+      const barPrint = Number(r.gold_bar_price) ? fmtMoney(r.gold_bar_price) : '';
       const salePrint = Number(r.sale_amount) ? fmtMoney(r.sale_amount) : '';
       const exemptPrint = Number(r.sale_amount) || Number(r.exempt_base) ? fmtVatDec(r.exempt_base) : '';
       const taxablePrint = Number(r.sale_amount) || Number(r.taxable_base) ? fmtVatDec(r.taxable_base) : '';
@@ -901,20 +901,17 @@ function renderVatTable() {
             </div>
             <span class="print-only" id="vat-p-inv-${idx}">${esc(r.invoice_no || '')}</span>
           </td>
-          <td>
+          <td class="num">
             <div class="screen-only">
-              <input type="text" value="${esc(r.buyer_name || '')}" placeholder="-" onchange="onVatRowChange(${idx}, 'buyer_name', this.value)" />
+              <input type="number" step="50" class="num" value="${r.gold_bar_price || ''}" placeholder="ราคาทองแท่ง" onchange="onVatRowChange(${idx}, 'gold_bar_price', this.value)" />
             </div>
-            <span class="print-only" id="vat-p-buyer-${idx}">${esc(r.buyer_name || '')}</span>
+            <span class="print-only" id="vat-p-bar-${idx}">${esc(barPrint)}</span>
           </td>
           <td>
             <div class="screen-only">
               <input type="text" value="${esc(r.item_desc || '')}" placeholder="เช่น คอ 3.8g" onchange="onVatRowChange(${idx}, 'item_desc', this.value)" />
             </div>
             <span class="print-only" id="vat-p-item-${idx}">${esc(r.item_desc || '')}</span>
-          </td>
-          <td class="no-print">
-            <input type="number" step="50" class="num" value="${r.gold_bar_price || ''}" placeholder="ราคาทองแท่ง" onchange="onVatRowChange(${idx}, 'gold_bar_price', this.value)" />
           </td>
           <td class="no-print">
             <input type="number" step="0.01" class="num" value="${r.weight_g || ''}" placeholder="กรัม" onchange="onVatRowChange(${idx}, 'weight_g', this.value)" />
@@ -946,7 +943,7 @@ function renderVatTable() {
   const blanksHtml = Array.from({ length: blankCount }, () => `
     <tr class="vat-blank-row">
       <td></td><td></td><td></td><td></td>
-      <td class="no-print"></td><td class="no-print"></td>
+      <td class="no-print"></td>
       <td></td><td></td><td></td><td></td>
       <td class="no-print"></td>
     </tr>
@@ -989,10 +986,12 @@ function onVatRowChange(idx, field, val) {
   row.taxable_base = round2Client((Number(row.sale_amount) || 0) - (Number(row.exempt_base) || 0));
   row.vat_amount = round2Client(row.taxable_base * 0.07);
 
+  const pBar = document.getElementById(`vat-p-bar-${idx}`);
   const pSale = document.getElementById(`vat-p-sale-${idx}`);
   const pEx = document.getElementById(`vat-p-exempt-${idx}`);
   const cTax = document.getElementById(`vat-cell-taxable-${idx}`);
   const cVat = document.getElementById(`vat-cell-vat-${idx}`);
+  if (pBar) pBar.textContent = Number(row.gold_bar_price) ? fmtMoney(row.gold_bar_price) : '';
   if (pSale) pSale.textContent = Number(row.sale_amount) ? fmtMoney(row.sale_amount) : '';
   if (pEx) pEx.textContent = Number(row.sale_amount) || Number(row.exempt_base) ? fmtVatDec(row.exempt_base) : '';
   if (cTax) cTax.textContent = Number(row.sale_amount) || Number(row.taxable_base) ? fmtVatDec(row.taxable_base) : '';
