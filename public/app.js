@@ -883,9 +883,10 @@ function renderVatTable() {
       prevDate = r.date_iso;
       const barPrint = Number(r.gold_bar_price) ? fmtMoney(r.gold_bar_price) : '';
       const salePrint = Number(r.sale_amount) ? fmtMoney(r.sale_amount) : '';
-      const exemptPrint = Number(r.sale_amount) || Number(r.exempt_base) ? fmtVatDec(r.exempt_base) : '';
-      const taxablePrint = Number(r.sale_amount) || Number(r.taxable_base) ? fmtVatDec(r.taxable_base) : '';
-      const vatPrint = Number(r.sale_amount) || Number(r.vat_amount) ? fmtVatDec(r.vat_amount) : '';
+      const hasTaxCalc = Number(r.gold_bar_price) > 0 || Number(r.exempt_base) > 0;
+      const exemptPrint = hasTaxCalc ? fmtVatDec(r.exempt_base) : '';
+      const taxablePrint = hasTaxCalc ? fmtVatDec(r.taxable_base) : '';
+      const vatPrint = hasTaxCalc ? fmtVatDec(r.vat_amount) : '';
 
       return `
         <tr>
@@ -924,7 +925,7 @@ function renderVatTable() {
           </td>
           <td class="num">
             <div class="screen-only">
-              <input type="number" step="0.01" class="num" id="vat-in-exempt-${idx}" value="${r.exempt_base ?? ''}" onchange="onVatRowChange(${idx}, 'exempt_base', this.value)" />
+              <input type="number" step="0.01" class="num" id="vat-in-exempt-${idx}" value="${hasTaxCalc ? (r.exempt_base ?? '') : ''}" onchange="onVatRowChange(${idx}, 'exempt_base', this.value)" />
             </div>
             <span class="print-only" id="vat-p-exempt-${idx}">${esc(exemptPrint)}</span>
           </td>
@@ -983,9 +984,10 @@ function renderVatPrintPages() {
           prevDate = r.date_iso;
           const barStr = Number(r.gold_bar_price) ? fmtMoney(r.gold_bar_price) : '';
           const saleStr = Number(r.sale_amount) ? fmtMoney(r.sale_amount) : '';
-          const exemptStr = Number(r.sale_amount) || Number(r.exempt_base) ? fmtVatDec(r.exempt_base) : '';
-          const taxableStr = Number(r.sale_amount) || Number(r.taxable_base) ? fmtVatDec(r.taxable_base) : '';
-          const vatStr = Number(r.sale_amount) || Number(r.vat_amount) ? fmtVatDec(r.vat_amount) : '';
+          const hasTaxCalc = Number(r.gold_bar_price) > 0 || Number(r.exempt_base) > 0;
+          const exemptStr = hasTaxCalc ? fmtVatDec(r.exempt_base) : '';
+          const taxableStr = hasTaxCalc ? fmtVatDec(r.taxable_base) : '';
+          const vatStr = hasTaxCalc ? fmtVatDec(r.vat_amount) : '';
 
           return `
             <tr>
@@ -1093,11 +1095,16 @@ function onVatRowChange(idx, field, val) {
       row.exempt_base = calcGoldExemptBaseClient(row.gold_bar_price, row.weight_g);
       const exIn = document.getElementById(`vat-in-exempt-${idx}`);
       if (exIn) exIn.value = row.exempt_base;
+    } else if (field === 'gold_bar_price' && numVal <= 0) {
+      row.exempt_base = 0;
+      const exIn = document.getElementById(`vat-in-exempt-${idx}`);
+      if (exIn) exIn.value = '';
     }
   }
 
-  row.taxable_base = round2Client((Number(row.sale_amount) || 0) - (Number(row.exempt_base) || 0));
-  row.vat_amount = round2Client(row.taxable_base * 0.07);
+  const hasTaxCalc = Number(row.gold_bar_price) > 0 || Number(row.exempt_base) > 0;
+  row.taxable_base = hasTaxCalc ? round2Client((Number(row.sale_amount) || 0) - (Number(row.exempt_base) || 0)) : 0;
+  row.vat_amount = hasTaxCalc ? round2Client(row.taxable_base * 0.07) : 0;
 
   const pBar = document.getElementById(`vat-p-bar-${idx}`);
   const pSale = document.getElementById(`vat-p-sale-${idx}`);
@@ -1106,9 +1113,9 @@ function onVatRowChange(idx, field, val) {
   const cVat = document.getElementById(`vat-cell-vat-${idx}`);
   if (pBar) pBar.textContent = Number(row.gold_bar_price) ? fmtMoney(row.gold_bar_price) : '';
   if (pSale) pSale.textContent = Number(row.sale_amount) ? fmtMoney(row.sale_amount) : '';
-  if (pEx) pEx.textContent = Number(row.sale_amount) || Number(row.exempt_base) ? fmtVatDec(row.exempt_base) : '';
-  if (cTax) cTax.textContent = Number(row.sale_amount) || Number(row.taxable_base) ? fmtVatDec(row.taxable_base) : '';
-  if (cVat) cVat.textContent = Number(row.sale_amount) || Number(row.vat_amount) ? fmtVatDec(row.vat_amount) : '';
+  if (pEx) pEx.textContent = hasTaxCalc ? fmtVatDec(row.exempt_base) : '';
+  if (cTax) cTax.textContent = hasTaxCalc ? fmtVatDec(row.taxable_base) : '';
+  if (cVat) cVat.textContent = hasTaxCalc ? fmtVatDec(row.vat_amount) : '';
 
   renderVatFooter();
   renderVatPrintPages();
@@ -1165,7 +1172,7 @@ function removeVatReportRow(idx) {
 
 function openImportVatSalesModal() {
   const cands = state.vatCache?.candidateSales || [];
-  const defBar = Number(document.getElementById('vat-default-bar-price')?.value || 62600);
+  const defBar = document.getElementById('vat-default-bar-price')?.value.trim() || '';
   const rowsHtml = cands
     .map(
       (c, i) => `
@@ -1188,7 +1195,7 @@ function openImportVatSalesModal() {
     </div>
     <div class="form-group">
       <label>ราคาทองแท่งต่อบาทที่ใช้คำนวณเริ่มต้น (ปรับแก้รายแถวทีหลังได้)</label>
-      <input type="number" step="50" id="vat-imp-bar-price" value="${defBar}" />
+      <input type="number" step="50" id="vat-imp-bar-price" value="${esc(defBar)}" placeholder="เว้นว่างไว้เพื่อกรอกทีละวัน" />
     </div>
     <div class="table-wrap" style="max-height:360px;overflow-y:auto;">
       <table class="data-table">
@@ -1217,8 +1224,8 @@ function confirmImportVatSales(mode) {
     const wG = Number(c.new_gold_g || 0);
     const saleAmt = Number(c.inc_sell || 0);
     const exemptBase = barPrice > 0 && wG > 0 ? calcGoldExemptBaseClient(barPrice, wG) : 0;
-    const taxableBase = round2Client(saleAmt - exemptBase);
-    const vatAmt = round2Client(taxableBase * 0.07);
+    const taxableBase = barPrice > 0 && exemptBase > 0 ? round2Client(saleAmt - exemptBase) : 0;
+    const vatAmt = taxableBase !== 0 ? round2Client(taxableBase * 0.07) : 0;
     const descBase = String(c.description || '').trim();
     const hasUnit = /\d/.test(descBase);
     const itemDesc = wG > 0 && !hasUnit ? `${descBase} ${wG}g`.trim() : descBase;

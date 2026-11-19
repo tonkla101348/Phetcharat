@@ -1613,7 +1613,7 @@ function saveVatSalesReport(monthKey, rowsInput) {
     const exemptBase = hasExplicitExempt
       ? round2(Number(r.exempt_base) || 0)
       : calcGoldExemptBase(goldBarPrice, weightG);
-    const taxableBase = round2(saleAmt - exemptBase);
+    const taxableBase = goldBarPrice > 0 || exemptBase > 0 ? round2(saleAmt - exemptBase) : 0;
     const vatAmt = round2(taxableBase * 0.07);
     normalizedRows.push({
       row_order: idx + 1,
