@@ -938,7 +938,7 @@ function renderVatTable() {
     })
     .join('');
 
-  const minPrintRows = 28;
+  const minPrintRows = 34;
   const blankCount = Math.max(0, minPrintRows - state.vatRows.length);
   const blanksHtml = Array.from({ length: blankCount }, () => `
     <tr class="vat-blank-row">
@@ -959,7 +959,7 @@ function renderVatPrintPages() {
   const container = document.getElementById('vat-print-pages');
   if (!container) return;
 
-  const ROWS_PER_PAGE = 28;
+  const ROWS_PER_PAGE = 34;
   const monthShort = document.getElementById('vat-print-month')?.textContent || '';
   const yearShort = document.getElementById('vat-print-year')?.textContent || '';
   const hideRepeatDate = document.getElementById('vat-hide-repeat-date')?.checked;

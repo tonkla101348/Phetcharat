@@ -1142,7 +1142,7 @@ input[type="date"].dmy-enhanced::-webkit-calendar-picker-indicator {
   }
   .vat-print-page {
     width: 100%;
-    padding: 15mm 14mm 14mm 14mm !important;
+    padding: 12mm 13mm 12mm 13mm !important;
     margin: 0 !important;
     box-sizing: border-box;
     font-family: 'Sarabun', 'TH Sarabun New', 'TH SarabunPSK', sans-serif !important;
@@ -1154,19 +1154,19 @@ input[type="date"].dmy-enhanced::-webkit-calendar-picker-indicator {
     break-after: auto;
   }
   .vat-print-page .vat-doc-header {
-    margin-bottom: 10px !important;
+    margin-bottom: 8px !important;
   }
   .vat-print-page .vat-doc-title {
-    font-size: 20px !important;
-    margin-bottom: 4px !important;
+    font-size: 19px !important;
+    margin-bottom: 3px !important;
   }
   .vat-print-page .vat-doc-period {
-    font-size: 14.5px !important;
-    margin-bottom: 10px !important;
+    font-size: 14px !important;
+    margin-bottom: 6px !important;
   }
   .vat-print-page .vat-company-line {
-    font-size: 14px !important;
-    margin-bottom: 4px !important;
+    font-size: 13.5px !important;
+    margin-bottom: 3px !important;
   }
   .screen-only {
     display: none !important;
@@ -1189,18 +1189,25 @@ input[type="date"].dmy-enhanced::-webkit-calendar-picker-indicator {
     padding: 3px 5px !important;
     font-size: 12px !important;
   }
-  .vat-table th {
-    font-size: 11.5px !important;
+  .vat-print-page .vat-table {
+    table-layout: fixed !important;
+  }
+  .vat-print-page .vat-table th {
+    font-size: 11px !important;
+    padding: 2.5px 4px !important;
   }
   .vat-print-page .vat-table td {
-    height: 23px !important;
-    padding: 3px 6px !important;
-    font-size: 12px !important;
-    line-height: 1.25 !important;
+    height: 22px !important;
+    padding: 2px 5px !important;
+    font-size: 11.5px !important;
+    line-height: 1.2 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
   }
   .vat-print-page .vat-table tr.vat-total-row td {
     font-weight: 700 !important;
-    height: 25px !important;
+    height: 24px !important;
   }
 }
 
