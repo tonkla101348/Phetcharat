@@ -155,7 +155,7 @@ async function runAutoUpdate() {
       const dstFile = path.join(ROOT_DIR, file);
       if (!fs.existsSync(srcFile)) continue;
       const srcBuf = fs.readFileSync(srcFile);
-      const changed = !fs.existsSync(dstFile) || !Buffer.equals(srcBuf, fs.readFileSync(dstFile));
+      const changed = !fs.existsSync(dstFile) || !srcBuf.equals(fs.readFileSync(dstFile));
       if (changed) {
         fs.writeFileSync(dstFile, srcBuf);
       }
