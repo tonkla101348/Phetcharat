@@ -765,13 +765,11 @@ function round2Client(n) {
   return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 }
 
-function calcGoldExemptBaseClient(barPrice, weightG) {
-  const bar = Number(barPrice) || 0;
+function calcGoldExemptBaseClient(ornamentPrice, weightG) {
+  const price = Number(ornamentPrice) || 0;
   const w = Number(weightG) || 0;
-  if (bar <= 0 || w <= 0) return 0;
-  const perGram = Math.round((bar * 0.98) / 15.16);
-  const perBaht = round2Client(perGram * 15.16);
-  return round2Client(perBaht * (w / 15.2));
+  if (price <= 0 || w <= 0) return 0;
+  return round2Client(price * (w / 15.2));
 }
 
 function extractWeightFromDesc(desc) {
@@ -889,7 +887,7 @@ function renderVatTable() {
       const dateStr = fmtVatDate(r.date_iso);
       const printDateStr = hideRepeatDate && r.date_iso === prevDate ? '' : dateStr;
       prevDate = r.date_iso;
-      const barPrint = Number(r.gold_bar_price) ? fmtMoney(r.gold_bar_price) : '';
+      const barPrint = Number(r.gold_bar_price) ? fmtVatDec(r.gold_bar_price) : '';
       const salePrint = Number(r.sale_amount) ? fmtMoney(r.sale_amount) : '';
       const hasTaxCalc = Number(r.gold_bar_price) > 0 || Number(r.exempt_base) > 0;
       const exemptPrint = hasTaxCalc ? fmtVatDec(r.exempt_base) : '';
@@ -912,7 +910,7 @@ function renderVatTable() {
           </td>
           <td class="num">
             <div class="screen-only">
-              <input type="number" step="50" class="num" value="${r.gold_bar_price || ''}" placeholder="ราคาทองแท่ง" onchange="onVatRowChange(${idx}, 'gold_bar_price', this.value)" />
+              <input type="number" step="0.01" class="num" value="${r.gold_bar_price || ''}" placeholder="ราคาทองรูปพรรณ" onchange="onVatRowChange(${idx}, 'gold_bar_price', this.value)" />
             </div>
             <span class="print-only" id="vat-p-bar-${idx}">${esc(barPrint)}</span>
           </td>
@@ -986,7 +984,7 @@ function renderVatPrintPages() {
           const dateStr = fmtVatDate(r.date_iso);
           const printDateStr = hideRepeatDate && r.date_iso === prevDate ? '' : dateStr;
           prevDate = r.date_iso;
-          const barStr = Number(r.gold_bar_price) ? fmtMoney(r.gold_bar_price) : '';
+          const barStr = Number(r.gold_bar_price) ? fmtVatDec(r.gold_bar_price) : '';
           const saleStr = Number(r.sale_amount) ? fmtMoney(r.sale_amount) : '';
           const hasTaxCalc = Number(r.gold_bar_price) > 0 || Number(r.exempt_base) > 0;
           const exemptStr = hasTaxCalc ? fmtVatDec(r.exempt_base) : '';
@@ -1047,7 +1045,7 @@ function renderVatPrintPages() {
             <thead>
               <tr>
                 <th colspan="2">ใบกำกับภาษีขาย</th>
-                <th rowspan="2" style="width:11%;">ราคาทองแท่ง<br />ต่อบาท</th>
+                <th rowspan="2" style="width:12%;">ราคาทองรูปพรรณ<br />ต่อบาท</th>
                 <th rowspan="2" style="width:14%;">รายการสินค้า</th>
                 <th rowspan="2" style="width:13%;">รายการขายทอง<br />รูปพรรณ</th>
                 <th rowspan="2" style="width:16%;">มูลค่าของฐานภาษี<br />ที่ไม่ต้องนำมารวม<br />คำนวณ</th>
@@ -1056,7 +1054,7 @@ function renderVatPrintPages() {
               </tr>
               <tr>
                 <th style="width:10%;">วันที่</th>
-                <th style="width:11%;">เล่มที่/เลขที่</th>
+                <th style="width:10%;">เล่มที่/เลขที่</th>
               </tr>
             </thead>
             <tbody>${dataRowsHtml}${blanksHtml}${totalHtml}</tbody>
@@ -1133,7 +1131,7 @@ function onVatRowChange(idx, field, val) {
   const pEx = document.getElementById(`vat-p-exempt-${idx}`);
   const cTax = document.getElementById(`vat-cell-taxable-${idx}`);
   const cVat = document.getElementById(`vat-cell-vat-${idx}`);
-  if (pBar) pBar.textContent = Number(row.gold_bar_price) ? fmtMoney(row.gold_bar_price) : '';
+  if (pBar) pBar.textContent = Number(row.gold_bar_price) ? fmtVatDec(row.gold_bar_price) : '';
   if (pSale) pSale.textContent = Number(row.sale_amount) ? fmtMoney(row.sale_amount) : '';
   if (pEx) pEx.textContent = hasTaxCalc ? fmtVatDec(row.exempt_base) : '';
   if (cTax) cTax.textContent = hasTaxCalc ? fmtVatDec(row.taxable_base) : '';
@@ -1146,12 +1144,12 @@ function onVatRowChange(idx, field, val) {
 function applyDefaultGoldBarPrice() {
   const barVal = Number(document.getElementById('vat-default-bar-price')?.value || 0);
   if (barVal <= 0) {
-    toast('กรุณากรอกราคาทองแท่งต่อบาทก่อน (เช่น 62600)', 'error');
+    toast('กรุณากรอกราคาทองรูปพรรณต่อบาทก่อน (เช่น 61352.52)', 'error');
     return;
   }
   const hasEmpty = state.vatRows.some((r) => !(Number(r.gold_bar_price) > 0));
   if (!hasEmpty && state.vatRows.length > 0) {
-    if (!confirm(`ทุกแถวมีราคาทองแท่งอยู่แล้ว ต้องการเปลี่ยนราคาทองแท่งเป็น ${fmtMoney(barVal)} บาท ทั้งหมดและคำนวณใหม่ใช่หรือไม่?`)) {
+    if (!confirm(`ทุกแถวมีราคาทองรูปพรรณอยู่แล้ว ต้องการเปลี่ยนเป็น ${fmtVatDec(barVal)} บาท ทั้งหมดและคำนวณใหม่ใช่หรือไม่?`)) {
       return;
     }
   }
@@ -1219,11 +1217,11 @@ function openImportVatSalesModal() {
       เลือกรายการขายทองรูปพรรณที่จะนำเข้าในรายงานภาษีขาย (ระบบติ๊กเลือกเฉพาะรายการทองรูปพรรณให้อัตโนมัติ ไม่รวมแท่ง/ออมทอง/เครื่องเงิน)
     </div>
     <div class="form-group">
-      <label>ราคาทองแท่งต่อบาทที่ใช้คำนวณเริ่มต้น (ปรับแก้รายแถวทีหลังได้)</label>
-      <input type="number" step="50" id="vat-imp-bar-price" value="${esc(defBar)}" placeholder="เว้นว่างไว้เพื่อดึงราคาปิดวันตามวันที่อัตโนมัติ" />
+      <label>ราคาทองรูปพรรณต่อบาทที่ใช้คำนวณเริ่มต้น (ปรับแก้รายแถวทีหลังได้)</label>
+      <input type="number" step="0.01" id="vat-imp-bar-price" value="${esc(defBar)}" placeholder="เว้นว่างไว้เพื่อดึงราคาปิดวันตามวันที่อัตโนมัติ" />
       <label style="display:inline-flex;align-items:center;gap:6px;margin-top:8px;font-weight:400;cursor:pointer;">
         <input type="checkbox" id="vat-imp-auto-fetch" checked />
-        ดึงราคาทองแท่งปิดวันตามวันที่อัตโนมัติ (จาก ราคาทองคำวันนี้.com เมื่อเว้นว่างด้านบน)
+        ดึงราคาทองรูปพรรณ (ฐานภาษี) ปิดวันตามวันที่อัตโนมัติ (จาก ราคาทองคำวันนี้.com เมื่อเว้นว่างด้านบน)
       </label>
     </div>
     <div class="table-wrap" style="max-height:360px;overflow-y:auto;">
@@ -1243,20 +1241,31 @@ function openImportVatSalesModal() {
   );
 }
 
+function extractOrnamentTaxBase(rec) {
+  if (!rec) return 0;
+  if (Number(rec.orn_tax_base) > 0) return round2Client(Number(rec.orn_tax_base));
+  if (Number(rec.bar_buy) > 0) {
+    return round2Client(Math.round((Number(rec.bar_buy) * 0.98) / 15.16) * 15.16);
+  }
+  return 0;
+}
+
 function resolveDailyClosingPrice(dateIso, pricesMap, prevFallback) {
   if (!dateIso) return null;
-  if (pricesMap && pricesMap[dateIso] && Number(pricesMap[dateIso].bar_buy) > 0) {
-    return { price: Number(pricesMap[dateIso].bar_buy), exact: true, refDate: dateIso };
+  const exactPrice = pricesMap ? extractOrnamentTaxBase(pricesMap[dateIso]) : 0;
+  if (exactPrice > 0) {
+    return { price: exactPrice, exact: true, refDate: dateIso };
   }
   const keys = Object.keys(pricesMap || {})
-    .filter((k) => k < dateIso && Number(pricesMap[k]?.bar_buy) > 0)
+    .filter((k) => k < dateIso && extractOrnamentTaxBase(pricesMap[k]) > 0)
     .sort();
   if (keys.length > 0) {
     const lastKey = keys[keys.length - 1];
-    return { price: Number(pricesMap[lastKey].bar_buy), exact: false, refDate: lastKey };
+    return { price: extractOrnamentTaxBase(pricesMap[lastKey]), exact: false, refDate: lastKey };
   }
-  if (prevFallback && prevFallback.date_iso <= dateIso && Number(prevFallback.bar_buy) > 0) {
-    return { price: Number(prevFallback.bar_buy), exact: false, refDate: prevFallback.date_iso };
+  const fallbackPrice = extractOrnamentTaxBase(prevFallback);
+  if (prevFallback && prevFallback.date_iso <= dateIso && fallbackPrice > 0) {
+    return { price: fallbackPrice, exact: false, refDate: prevFallback.date_iso };
   }
   return null;
 }
@@ -1268,7 +1277,7 @@ async function fetchDailyGoldPricesForVat() {
   }
   const hasEmpty = state.vatRows.some((r) => !(Number(r.gold_bar_price) > 0));
   if (!hasEmpty) {
-    if (!confirm('ทุกแถวมีราคาทองแท่งอยู่แล้ว ต้องการดึงราคาทองปิดวันตามวันที่จาก ราคาทองคำวันนี้.com มาแทนที่ทั้งหมดใช่หรือไม่?')) {
+    if (!confirm('ทุกแถวมีราคาทองรูปพรรณอยู่แล้ว ต้องการดึงราคาทองรูปพรรณปิดวันตามวันที่จาก ราคาทองคำวันนี้.com มาแทนที่ทั้งหมดใช่หรือไม่?')) {
       return;
     }
   }
@@ -1315,17 +1324,17 @@ async function fetchDailyGoldPricesForVat() {
     });
 
     renderVatTable();
-    const parts = [`ดึงราคาทองปิดวันอัปเดตแล้ว ${updatedCount} รายการ`];
+    const parts = [`ดึงราคาทองรูปพรรณปิดวันอัปเดตแล้ว ${updatedCount} รายการ`];
     if (missingCount > 0) parts.push(`ไม่พบราคา ${missingCount} รายการ`);
     if (data.warning) parts.push(`(${data.warning})`);
     parts.push('— อย่าลืมกด "บันทึกรายงานภาษีขาย"');
     toast(parts.join(' '), updatedCount > 0 ? 'success' : 'error');
   } catch (err) {
-    toast('ดึงราคาทองไม่สำเร็จ: ' + err.message, 'error');
+    toast('ดึงราคาทองรูปพรรณไม่สำเร็จ: ' + err.message, 'error');
   } finally {
     if (btn) {
       btn.disabled = false;
-      btn.textContent = origText || 'ดึงราคาทองปิดวันตามวันที่';
+      btn.textContent = origText || 'ดึงราคาทองรูปพรรณปิดวันตามวันที่';
     }
   }
 }
@@ -1349,7 +1358,7 @@ async function confirmImportVatSales(mode) {
       prevFallback = gp.prevFallback || null;
       if (gp.warning) autoFetchNote = ` (${gp.warning})`;
     } catch {
-      autoFetchNote = ' (เชื่อมต่อเว็บราคาทองไม่ได้ — ราคาทองแท่งเว้นว่างไว้)';
+      autoFetchNote = ' (เชื่อมต่อเว็บราคาทองไม่ได้ — ราคาทองรูปพรรณเว้นว่างไว้)';
     }
   }
 

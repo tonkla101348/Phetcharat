@@ -234,13 +234,13 @@
               <strong>เดือนภาษี:</strong>
               <select id="vat-year-select" class="select-input" onchange="selectVatYear(this.value)"></select>
               <select id="vat-month-select" class="select-input" onchange="selectVatMonth(this.value)"></select>
-              <span class="muted">ราคาทองแท่งตั้งต้น:</span>
-              <input type="number" step="50" id="vat-default-bar-price" class="select-input" placeholder="เช่น 62600" style="width:120px;" />
-              <button type="button" class="btn btn-sm btn-outline" onclick="applyDefaultGoldBarPrice()">คำนวณฐานภาษียกเว้นจากราคาทองแท่ง</button>
+              <span class="muted">ราคาทองรูปพรรณตั้งต้น:</span>
+              <input type="number" step="0.01" id="vat-default-bar-price" class="select-input" placeholder="เช่น 61352.52" style="width:130px;" />
+              <button type="button" class="btn btn-sm btn-outline" onclick="applyDefaultGoldBarPrice()">คำนวณฐานภาษียกเว้นจากราคาทองรูปพรรณ</button>
             </div>
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
               <button type="button" class="btn btn-outline" onclick="openImportVatSalesModal()">ดึงรายการขายทองจากสมุดบัญชี</button>
-              <button type="button" class="btn btn-emerald" id="vat-fetch-prices-btn" onclick="fetchDailyGoldPricesForVat()">ดึงราคาทองปิดวันตามวันที่</button>
+              <button type="button" class="btn btn-emerald" id="vat-fetch-prices-btn" onclick="fetchDailyGoldPricesForVat()">ดึงราคาทองรูปพรรณปิดวันตามวันที่</button>
               <button type="button" class="btn btn-outline" onclick="addVatReportRow()">+ เพิ่มแถว</button>
               <button type="button" class="btn btn-primary" onclick="saveVatReport()">บันทึกรายงานภาษีขาย</button>
               <button type="button" class="btn btn-gold" onclick="printVatReport()">สั่งพิมพ์รายงานภาษีขาย (A4)</button>
@@ -255,7 +255,7 @@
               <input type="checkbox" id="vat-show-total-row" checked onchange="renderVatTable()" />
               แสดงแถวรวมท้ายตาราง
             </label>
-            <span class="muted">คำนวณฐานภาษียกเว้นและภาษีมูลค่าเพิ่ม 7% อัตโนมัติจากราคาทองแท่งต่อบาทและน้ำหนัก</span>
+            <span class="muted">คำนวณฐานภาษียกเว้นอัตโนมัติ: ราคาทองรูปพรรณ × (น้ำหนัก g / 15.2) และภาษีมูลค่าเพิ่ม 7%</span>
           </div>
         </div>
 
@@ -279,7 +279,7 @@
             <thead>
               <tr>
                 <th colspan="2">ใบกำกับภาษีขาย</th>
-                <th rowspan="2" style="width:11%;">ราคาทองแท่ง<br />ต่อบาท</th>
+                <th rowspan="2" style="width:12%;">ราคาทองรูปพรรณ<br />ต่อบาท</th>
                 <th rowspan="2" style="width:14%;">รายการสินค้า</th>
                 <th rowspan="2" style="width:13%;">รายการขายทอง<br />รูปพรรณ</th>
                 <th rowspan="2" style="width:16%;">มูลค่าของฐานภาษี<br />ที่ไม่ต้องนำมารวม<br />คำนวณ</th>
@@ -289,7 +289,7 @@
               </tr>
               <tr>
                 <th style="width:10%;">วันที่</th>
-                <th style="width:11%;">เล่มที่/เลขที่</th>
+                <th style="width:10%;">เล่มที่/เลขที่</th>
               </tr>
             </thead>
             <tbody id="vat-tbody"></tbody>

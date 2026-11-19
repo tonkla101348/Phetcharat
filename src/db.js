@@ -310,6 +310,7 @@ function initSchema() {
     insCfg.run(k, v);
   }
   seedDefaultNov69VatRowsIfEmpty();
+  migrateVatPricesToOrnamentOnce();
   db.prepare("DELETE FROM sync_queue WHERE action = 'syncSalesTaxReport' AND status IN ('pending', 'failed')").run();
 }
 
@@ -1430,19 +1431,19 @@ function getAnnualOverview(yearBe) {
 }
 
 const DEFAULT_NOV_69_VAT_ROWS = [
-  { date_iso: '2026-11-02', invoice_no: '321 150', buyer_name: '', gold_bar_price: 62250, weight_g: 3.8, item_desc: 'คอ 3.8g', sale_amount: 16600, exempt_base: 15250.96, taxable_base: 1349.04, vat_amount: 94.43 },
-  { date_iso: '2026-11-03', invoice_no: '', buyer_name: '', gold_bar_price: 62800, weight_g: 3.8, item_desc: 'คอ 3.8g', sale_amount: 16800, exempt_base: 15387.40, taxable_base: 1412.60, vat_amount: 98.88 },
-  { date_iso: '2026-11-04', invoice_no: '', buyer_name: '', gold_bar_price: 62600, weight_g: 15.2, item_desc: 'คอ 15.2g', sale_amount: 65400, exempt_base: 61352.52, taxable_base: 4047.48, vat_amount: 283.32 },
-  { date_iso: '2026-11-05', invoice_no: '', buyer_name: '', gold_bar_price: 67350, weight_g: 1.9, item_desc: 'แขน 1.9g', sale_amount: 9000, exempt_base: 8248.79, taxable_base: 751.20, vat_amount: 52.58 },
-  { date_iso: '2026-11-07', invoice_no: '', buyer_name: '', gold_bar_price: 64600, weight_g: 7.6, item_desc: 'คอ 7.6g', sale_amount: 34400, exempt_base: 31654.08, taxable_base: 2745.92, vat_amount: 192.21 },
-  { date_iso: '2026-11-09', invoice_no: '', buyer_name: '', gold_bar_price: 65200, weight_g: 1.9, item_desc: 'แหวน 1.9g', sale_amount: 8900, exempt_base: 7987.42, taxable_base: 912.57, vat_amount: 63.88 },
-  { date_iso: '2026-11-09', invoice_no: '', buyer_name: '', gold_bar_price: 65200, weight_g: 1.9, item_desc: 'แหวน 1.9g', sale_amount: 9100, exempt_base: 7987.42, taxable_base: 1112.58, vat_amount: 77.88 },
-  { date_iso: '2026-11-11', invoice_no: '', buyer_name: '', gold_bar_price: 64150, weight_g: 3.8, item_desc: 'แหวน 3.8g', sale_amount: 17500, exempt_base: 15717.13, taxable_base: 1782.87, vat_amount: 124.80 },
-  { date_iso: '2026-11-11', invoice_no: '', buyer_name: '', gold_bar_price: 64150, weight_g: 3.8, item_desc: 'แหวน 3.8g', sale_amount: 17500, exempt_base: 15717.13, taxable_base: 1782.87, vat_amount: 124.80 },
-  { date_iso: '2026-11-12', invoice_no: '', buyer_name: '', gold_bar_price: 63500, weight_g: 3.8, item_desc: 'คอ 3.8g', sale_amount: 16400, exempt_base: 15557.95, taxable_base: 842.05, vat_amount: 58.94 },
-  { date_iso: '2026-11-13', invoice_no: '', buyer_name: '', gold_bar_price: 62600, weight_g: 15.2, item_desc: 'แขน 15.2g', sale_amount: 64550, exempt_base: 61352.52, taxable_base: 3197.48, vat_amount: 223.82 },
-  { date_iso: '2026-11-13', invoice_no: '', buyer_name: '', gold_bar_price: 61950, weight_g: 3.8, item_desc: 'แหวน 3.8g', sale_amount: 17080, exempt_base: 15178.95, taxable_base: 1901.05, vat_amount: 133.07 },
-  { date_iso: '2026-11-18', invoice_no: '', buyer_name: '', gold_bar_price: 60900, weight_g: 3.8, item_desc: 'แหวน 3.8g', sale_amount: 16200, exempt_base: 14921.23, taxable_base: 1278.77, vat_amount: 89.51 },
+  { date_iso: '2026-11-02', invoice_no: '321 150', buyer_name: '', gold_bar_price: 61003.84, weight_g: 3.8, item_desc: 'คอ 3.8g', sale_amount: 16600, exempt_base: 15250.96, taxable_base: 1349.04, vat_amount: 94.43 },
+  { date_iso: '2026-11-03', invoice_no: '', buyer_name: '', gold_bar_price: 61549.60, weight_g: 3.8, item_desc: 'คอ 3.8g', sale_amount: 16800, exempt_base: 15387.40, taxable_base: 1412.60, vat_amount: 98.88 },
+  { date_iso: '2026-11-04', invoice_no: '', buyer_name: '', gold_bar_price: 61352.52, weight_g: 15.2, item_desc: 'คอ 15.2g', sale_amount: 65400, exempt_base: 61352.52, taxable_base: 4047.48, vat_amount: 283.32 },
+  { date_iso: '2026-11-05', invoice_no: '', buyer_name: '', gold_bar_price: 65990.32, weight_g: 1.9, item_desc: 'แขน 1.9g', sale_amount: 9000, exempt_base: 8248.79, taxable_base: 751.20, vat_amount: 52.58 },
+  { date_iso: '2026-11-07', invoice_no: '', buyer_name: '', gold_bar_price: 63308.16, weight_g: 7.6, item_desc: 'คอ 7.6g', sale_amount: 34400, exempt_base: 31654.08, taxable_base: 2745.92, vat_amount: 192.21 },
+  { date_iso: '2026-11-09', invoice_no: '', buyer_name: '', gold_bar_price: 63899.36, weight_g: 1.9, item_desc: 'แหวน 1.9g', sale_amount: 8900, exempt_base: 7987.42, taxable_base: 912.57, vat_amount: 63.88 },
+  { date_iso: '2026-11-09', invoice_no: '', buyer_name: '', gold_bar_price: 63899.36, weight_g: 1.9, item_desc: 'แหวน 1.9g', sale_amount: 9100, exempt_base: 7987.42, taxable_base: 1112.58, vat_amount: 77.88 },
+  { date_iso: '2026-11-11', invoice_no: '', buyer_name: '', gold_bar_price: 62868.52, weight_g: 3.8, item_desc: 'แหวน 3.8g', sale_amount: 17500, exempt_base: 15717.13, taxable_base: 1782.87, vat_amount: 124.80 },
+  { date_iso: '2026-11-11', invoice_no: '', buyer_name: '', gold_bar_price: 62868.52, weight_g: 3.8, item_desc: 'แหวน 3.8g', sale_amount: 17500, exempt_base: 15717.13, taxable_base: 1782.87, vat_amount: 124.80 },
+  { date_iso: '2026-11-12', invoice_no: '', buyer_name: '', gold_bar_price: 62231.80, weight_g: 3.8, item_desc: 'คอ 3.8g', sale_amount: 16400, exempt_base: 15557.95, taxable_base: 842.05, vat_amount: 58.94 },
+  { date_iso: '2026-11-13', invoice_no: '', buyer_name: '', gold_bar_price: 61352.52, weight_g: 15.2, item_desc: 'แขน 15.2g', sale_amount: 64550, exempt_base: 61352.52, taxable_base: 3197.48, vat_amount: 223.82 },
+  { date_iso: '2026-11-13', invoice_no: '', buyer_name: '', gold_bar_price: 60715.80, weight_g: 3.8, item_desc: 'แหวน 3.8g', sale_amount: 17080, exempt_base: 15178.95, taxable_base: 1901.05, vat_amount: 133.07 },
+  { date_iso: '2026-11-18', invoice_no: '', buyer_name: '', gold_bar_price: 59684.92, weight_g: 3.8, item_desc: 'แหวน 3.8g', sale_amount: 16200, exempt_base: 14921.23, taxable_base: 1278.77, vat_amount: 89.51 },
 ];
 
 function seedDefaultNov69VatRowsIfEmpty() {
@@ -1475,13 +1476,39 @@ function seedDefaultNov69VatRowsIfEmpty() {
   });
 }
 
-function calcGoldExemptBase(goldBarPrice, weightG) {
-  const bar = Number(goldBarPrice) || 0;
+function migrateVatPricesToOrnamentOnce() {
+  const done = db.prepare("SELECT value FROM sync_config WHERE key = 'vat_price_migrated_orn_v1'").get();
+  if (done && done.value === '1') return;
+
+  const rows = db
+    .prepare('SELECT id, gold_bar_price, weight_g, exempt_base FROM vat_sales_rows WHERE gold_bar_price > 0 AND weight_g > 0 AND exempt_base > 0')
+    .all();
+  const upd = db.prepare('UPDATE vat_sales_rows SET gold_bar_price = ? WHERE id = ?');
+
+  db.exec('BEGIN');
+  try {
+    for (const r of rows) {
+      const calcFromNewFormula = round2(Number(r.gold_bar_price) * (Number(r.weight_g) / 15.2));
+      if (Math.abs(calcFromNewFormula - Number(r.exempt_base)) > 1) {
+        const ornPricePerBaht = round2(Number(r.exempt_base) * (15.2 / Number(r.weight_g)));
+        if (ornPricePerBaht > 0) {
+          upd.run(ornPricePerBaht, r.id);
+        }
+      }
+    }
+    db.prepare("INSERT OR REPLACE INTO sync_config (key, value) VALUES ('vat_price_migrated_orn_v1', '1')").run();
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
+function calcGoldExemptBase(ornamentPrice, weightG) {
+  const price = Number(ornamentPrice) || 0;
   const w = Number(weightG) || 0;
-  if (bar <= 0 || w <= 0) return 0;
-  const perGram = Math.round((bar * 0.98) / 15.16);
-  const perBaht = round2(perGram * 15.16);
-  return round2(perBaht * (w / 15.2));
+  if (price <= 0 || w <= 0) return 0;
+  return round2(price * (w / 15.2));
 }
 
 function parseMonthShortAndYearShort(monthKey, activeYear) {
