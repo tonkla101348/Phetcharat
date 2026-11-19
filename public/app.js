@@ -942,17 +942,7 @@ function renderVatTable() {
     })
     .join('');
 
-  const minPrintRows = 34;
-  const blankCount = Math.max(0, minPrintRows - state.vatRows.length);
-  const blanksHtml = Array.from({ length: blankCount }, () => `
-    <tr class="vat-blank-row">
-      <td></td><td></td><td></td><td></td>
-      <td></td><td></td><td></td><td></td>
-      <td class="no-print"></td>
-    </tr>
-  `).join('');
-
-  tbody.innerHTML = rowsHtml + blanksHtml;
+  tbody.innerHTML = rowsHtml;
   initDateInputs(tbody);
   renderVatFooter();
   renderVatPrintPages();
@@ -1006,12 +996,6 @@ function renderVatPrintPages() {
         })
         .join('');
 
-      const blankCount = Math.max(0, ROWS_PER_PAGE - chunk.length);
-      const blanksHtml = Array.from(
-        { length: blankCount },
-        () => '<tr class="vat-print-blank-row"><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>'
-      ).join('');
-
       const totalHtml =
         isLastPage && showTotal
           ? `
@@ -1057,7 +1041,7 @@ function renderVatPrintPages() {
                 <th style="width:10%;">เล่มที่/เลขที่</th>
               </tr>
             </thead>
-            <tbody>${dataRowsHtml}${blanksHtml}${totalHtml}</tbody>
+            <tbody>${dataRowsHtml}${totalHtml}</tbody>
           </table>
         </div>
       `;
