@@ -1220,7 +1220,11 @@ function openImportVatSalesModal() {
     </div>
     <div class="form-group">
       <label>ราคาทองแท่งต่อบาทที่ใช้คำนวณเริ่มต้น (ปรับแก้รายแถวทีหลังได้)</label>
-      <input type="number" step="50" id="vat-imp-bar-price" value="${esc(defBar)}" placeholder="เว้นว่างไว้เพื่อกรอกทีละวัน" />
+      <input type="number" step="50" id="vat-imp-bar-price" value="${esc(defBar)}" placeholder="เว้นว่างไว้เพื่อดึงราคาปิดวันตามวันที่อัตโนมัติ" />
+      <label style="display:inline-flex;align-items:center;gap:6px;margin-top:8px;font-weight:400;cursor:pointer;">
+        <input type="checkbox" id="vat-imp-auto-fetch" checked />
+        ดึงราคาทองแท่งปิดวันตามวันที่อัตโนมัติ (จาก ราคาทองคำวันนี้.com เมื่อเว้นว่างด้านบน)
+      </label>
     </div>
     <div class="table-wrap" style="max-height:360px;overflow-y:auto;">
       <table class="data-table">
@@ -1239,26 +1243,138 @@ function openImportVatSalesModal() {
   );
 }
 
-function confirmImportVatSales(mode) {
+function resolveDailyClosingPrice(dateIso, pricesMap, prevFallback) {
+  if (!dateIso) return null;
+  if (pricesMap && pricesMap[dateIso] && Number(pricesMap[dateIso].bar_buy) > 0) {
+    return { price: Number(pricesMap[dateIso].bar_buy), exact: true, refDate: dateIso };
+  }
+  const keys = Object.keys(pricesMap || {})
+    .filter((k) => k < dateIso && Number(pricesMap[k]?.bar_buy) > 0)
+    .sort();
+  if (keys.length > 0) {
+    const lastKey = keys[keys.length - 1];
+    return { price: Number(pricesMap[lastKey].bar_buy), exact: false, refDate: lastKey };
+  }
+  if (prevFallback && prevFallback.date_iso <= dateIso && Number(prevFallback.bar_buy) > 0) {
+    return { price: Number(prevFallback.bar_buy), exact: false, refDate: prevFallback.date_iso };
+  }
+  return null;
+}
+
+async function fetchDailyGoldPricesForVat() {
+  if (!state.vatRows.length) {
+    toast('ยังไม่มีรายการในตารางรายงานภาษีขาย', 'error');
+    return;
+  }
+  const hasEmpty = state.vatRows.some((r) => !(Number(r.gold_bar_price) > 0));
+  if (!hasEmpty) {
+    if (!confirm('ทุกแถวมีราคาทองแท่งอยู่แล้ว ต้องการดึงราคาทองปิดวันตามวันที่จาก ราคาทองคำวันนี้.com มาแทนที่ทั้งหมดใช่หรือไม่?')) {
+      return;
+    }
+  }
+
+  const btn = document.getElementById('vat-fetch-prices-btn');
+  const origText = btn ? btn.textContent : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'กำลังดึงราคาทอง...';
+  }
+
+  try {
+    const params = new URLSearchParams();
+    if (state.vatActiveMonth) params.set('month', state.vatActiveMonth);
+    if (state.vatActiveYear) params.set('year', state.vatActiveYear);
+    params.set('refresh', '1');
+    const data = await api(`/api/gold-prices?${params.toString()}`);
+    const pricesMap = data.prices || {};
+    const prevFallback = data.prevFallback || null;
+
+    let updatedCount = 0;
+    let missingCount = 0;
+    state.vatRows.forEach((r) => {
+      if (hasEmpty && Number(r.gold_bar_price) > 0) return;
+      const resolved = resolveDailyClosingPrice(r.date_iso, pricesMap, prevFallback);
+      if (resolved && resolved.price > 0) {
+        r.gold_bar_price = resolved.price;
+        if (!(Number(r.weight_g) > 0)) {
+          r.weight_g = extractWeightFromDesc(r.item_desc);
+        }
+        if (Number(r.weight_g) > 0) {
+          r.exempt_base = calcGoldExemptBaseClient(r.gold_bar_price, r.weight_g);
+          r.taxable_base = round2Client((Number(r.sale_amount) || 0) - r.exempt_base);
+          r.vat_amount = round2Client(r.taxable_base * 0.07);
+        } else {
+          r.exempt_base = 0;
+          r.taxable_base = 0;
+          r.vat_amount = 0;
+        }
+        updatedCount++;
+      } else {
+        missingCount++;
+      }
+    });
+
+    renderVatTable();
+    const parts = [`ดึงราคาทองปิดวันอัปเดตแล้ว ${updatedCount} รายการ`];
+    if (missingCount > 0) parts.push(`ไม่พบราคา ${missingCount} รายการ`);
+    if (data.warning) parts.push(`(${data.warning})`);
+    parts.push('— อย่าลืมกด "บันทึกรายงานภาษีขาย"');
+    toast(parts.join(' '), updatedCount > 0 ? 'success' : 'error');
+  } catch (err) {
+    toast('ดึงราคาทองไม่สำเร็จ: ' + err.message, 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = origText || 'ดึงราคาทองปิดวันตามวันที่';
+    }
+  }
+}
+
+async function confirmImportVatSales(mode) {
   const cands = state.vatCache?.candidateSales || [];
-  const barPrice = Number(document.getElementById('vat-imp-bar-price')?.value || 0);
+  const manualBarPrice = Number(document.getElementById('vat-imp-bar-price')?.value || 0);
+  const autoFetch = Boolean(document.getElementById('vat-imp-auto-fetch')?.checked);
+  const checkedChks = [...document.querySelectorAll('.vat-imp-chk:checked')];
+
+  let pricesMap = null;
+  let prevFallback = null;
+  let autoFetchNote = '';
+  if (manualBarPrice <= 0 && autoFetch && checkedChks.length > 0) {
+    try {
+      const params = new URLSearchParams();
+      if (state.vatActiveMonth) params.set('month', state.vatActiveMonth);
+      if (state.vatActiveYear) params.set('year', state.vatActiveYear);
+      const gp = await api(`/api/gold-prices?${params.toString()}`);
+      pricesMap = gp.prices || {};
+      prevFallback = gp.prevFallback || null;
+      if (gp.warning) autoFetchNote = ` (${gp.warning})`;
+    } catch {
+      autoFetchNote = ' (เชื่อมต่อเว็บราคาทองไม่ได้ — ราคาทองแท่งเว้นว่างไว้)';
+    }
+  }
+
   const selected = [];
-  document.querySelectorAll('.vat-imp-chk:checked').forEach((chk) => {
+  checkedChks.forEach((chk) => {
     const c = cands[Number(chk.dataset.candIdx)];
     if (!c) return;
-    const wG = Number(c.new_gold_g || 0);
-    const saleAmt = Number(c.inc_sell || 0);
-    const exemptBase = barPrice > 0 && wG > 0 ? calcGoldExemptBaseClient(barPrice, wG) : 0;
-    const taxableBase = barPrice > 0 && exemptBase > 0 ? round2Client(saleAmt - exemptBase) : 0;
-    const vatAmt = taxableBase !== 0 ? round2Client(taxableBase * 0.07) : 0;
     const descBase = String(c.description || '').trim();
+    const wG = Number(c.new_gold_g || 0) || extractWeightFromDesc(descBase);
+    const saleAmt = Number(c.inc_sell || 0);
+    let rowBarPrice = manualBarPrice;
+    if (rowBarPrice <= 0 && pricesMap) {
+      const resolved = resolveDailyClosingPrice(c.date_iso, pricesMap, prevFallback);
+      if (resolved && resolved.price > 0) rowBarPrice = resolved.price;
+    }
+    const exemptBase = rowBarPrice > 0 && wG > 0 ? calcGoldExemptBaseClient(rowBarPrice, wG) : 0;
+    const taxableBase = rowBarPrice > 0 && exemptBase > 0 ? round2Client(saleAmt - exemptBase) : 0;
+    const vatAmt = taxableBase !== 0 ? round2Client(taxableBase * 0.07) : 0;
     const hasUnit = /\d/.test(descBase);
-    const itemDesc = wG > 0 && !hasUnit ? `${descBase} ${wG}g`.trim() : descBase;
+    const itemDesc = Number(c.new_gold_g || 0) > 0 && !hasUnit ? `${descBase} ${c.new_gold_g}g`.trim() : descBase;
     selected.push({
       date_iso: c.date_iso,
       invoice_no: '',
       buyer_name: '',
-      gold_bar_price: barPrice,
+      gold_bar_price: rowBarPrice,
       weight_g: wG,
       item_desc: itemDesc,
       sale_amount: saleAmt,
@@ -1276,7 +1392,7 @@ function confirmImportVatSales(mode) {
   }
   closeModal();
   renderVatTable();
-  toast(`นำเข้า ${selected.length} รายการลงตารางรายงานภาษีขายแล้ว (อย่าลืมกด "บันทึกรายงานภาษีขาย")`);
+  toast(`นำเข้า ${selected.length} รายการลงตารางรายงานภาษีขายแล้ว${autoFetchNote} (อย่าลืมกด "บันทึกรายงานภาษีขาย")`);
 }
 
 async function saveVatReport() {

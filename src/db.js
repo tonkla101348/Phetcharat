@@ -279,6 +279,18 @@ function initSchema() {
       updated_at TEXT DEFAULT ''
     );
     CREATE INDEX IF NOT EXISTS idx_vat_sales_month ON vat_sales_rows(month_key, row_order, id);
+
+    CREATE TABLE IF NOT EXISTS gold_daily_prices (
+      date_iso TEXT PRIMARY KEY,
+      bar_buy REAL NOT NULL,
+      bar_sell REAL DEFAULT 0,
+      orn_tax_base REAL DEFAULT 0,
+      orn_sell REAL DEFAULT 0,
+      seq INTEGER DEFAULT 0,
+      time_str TEXT DEFAULT '',
+      source TEXT DEFAULT 'ราคาทองคำวันนี้.com',
+      updated_at TEXT NOT NULL
+    );
   `);
 
   const defaults = {
@@ -1623,6 +1635,72 @@ function saveVatSalesReport(monthKey, rowsInput) {
   return { monthKey: targetMonthKey, rows: savedRows, totals };
 }
 
+function upsertGoldDailyPrices(records) {
+  initSchema();
+  const list = Array.isArray(records) ? records : [];
+  if (!list.length) return 0;
+  const nowIso = new Date().toISOString();
+  const stmt = db.prepare(`
+    INSERT INTO gold_daily_prices (
+      date_iso, bar_buy, bar_sell, orn_tax_base, orn_sell, seq, time_str, source, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(date_iso) DO UPDATE SET
+      bar_buy = excluded.bar_buy,
+      bar_sell = excluded.bar_sell,
+      orn_tax_base = excluded.orn_tax_base,
+      orn_sell = excluded.orn_sell,
+      seq = excluded.seq,
+      time_str = excluded.time_str,
+      source = excluded.source,
+      updated_at = excluded.updated_at
+  `);
+
+  let count = 0;
+  db.exec('BEGIN');
+  try {
+    for (const r of list) {
+      const dateIso = String(r.date_iso || '').trim();
+      const barBuy = Number(r.bar_buy) || 0;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateIso) || barBuy <= 0) continue;
+      stmt.run(
+        dateIso,
+        barBuy,
+        Number(r.bar_sell) || 0,
+        Number(r.orn_tax_base) || 0,
+        Number(r.orn_sell) || 0,
+        Number(r.seq) || 0,
+        String(r.time_str || ''),
+        String(r.source || 'ราคาทองคำวันนี้.com'),
+        nowIso
+      );
+      count++;
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  return count;
+}
+
+function getGoldDailyPricesForMonth(yearCe, monthNum) {
+  initSchema();
+  const ym = `${Number(yearCe)}-${String(Number(monthNum)).padStart(2, '0')}`;
+  const rows = db
+    .prepare('SELECT * FROM gold_daily_prices WHERE date_iso >= ? AND date_iso <= ? ORDER BY date_iso ASC')
+    .all(`${ym}-01`, `${ym}-31`);
+  const prevFallback =
+    db
+      .prepare('SELECT * FROM gold_daily_prices WHERE date_iso < ? ORDER BY date_iso DESC LIMIT 1')
+      .get(`${ym}-01`) || null;
+
+  const prices = {};
+  for (const r of rows) {
+    prices[r.date_iso] = r;
+  }
+  return { prices, prevFallback, daysCount: rows.length };
+}
+
 function addAccountEntry(input) {
   return insertAccountEntryInternal(input);
 }
@@ -2020,6 +2098,10 @@ module.exports = {
   calcGoldExemptBase,
   getVatSalesReport,
   saveVatSalesReport,
+  upsertGoldDailyPrices,
+  getGoldDailyPricesForMonth,
+  getMonthOrderForKey,
+  getBeYearForMonthOrder,
   addAccountEntry,
   updateAccountEntry,
   deleteAccountEntry,

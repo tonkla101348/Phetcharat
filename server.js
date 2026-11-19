@@ -6,6 +6,7 @@ const { exec } = require('child_process');
 const { URL } = require('url');
 const dbMod = require('./src/db');
 const syncMod = require('./src/googleSync');
+const goldPriceMod = require('./src/goldPrice');
 
 const PORT = Number(process.env.PORT) || 3456;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -156,6 +157,18 @@ async function handleApi(req, res, parsedUrl) {
     const body = await parseJsonBody(req);
     const saved = dbMod.saveVatSalesReport(body.month_key, body.rows || []);
     return sendJson(res, 200, { ok: true, data: saved });
+  }
+
+  if (method === 'GET' && pathname === '/api/gold-prices') {
+    const month = parsedUrl.searchParams.get('month') || '';
+    const year = parsedUrl.searchParams.get('year') || '';
+    const refresh = parsedUrl.searchParams.get('refresh') === '1';
+    const data = await goldPriceMod.fetchAndCacheMonthGoldPrices({
+      monthKey: month,
+      yearBe: year ? Number(year) : 0,
+      forceRefresh: refresh,
+    });
+    return sendJson(res, 200, { ok: true, data });
   }
 
   if (method === 'POST' && pathname === '/api/account/entry') {
