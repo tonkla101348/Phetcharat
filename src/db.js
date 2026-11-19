@@ -298,6 +298,7 @@ function initSchema() {
     insCfg.run(k, v);
   }
   seedDefaultNov69VatRowsIfEmpty();
+  db.prepare("DELETE FROM sync_queue WHERE action = 'syncSalesTaxReport' AND status IN ('pending', 'failed')").run();
 }
 
 function numVal(cell) {
@@ -558,68 +559,6 @@ function seedAccountFromXlsx(filePath) {
 
       if (hasAnyValue) {
         pendingEntries.push(entry);
-      }
-    }
-
-    // Parse Sales Tax (รายงานภาษีขาย) columns R..Y if present on this month tab
-    const row1Cells = sheet.rows.find((r) => r.r === 1)?.cells || {};
-    if (strVal(row1Cells.R) === 'ใบกำกับภาษีขาย') {
-      const vatRows = [];
-      let lastVatDateIso = '';
-      for (const row of sheet.rows) {
-        if (row.r < 3) continue;
-        const c = row.cells;
-        const parsedDate = normalizeSheetDate(c.R?.v);
-        if (parsedDate) lastVatDateIso = parsedDate;
-        const saleAmt = round2(numVal(c.V));
-        if (saleAmt > 0) {
-          const itemDesc = strVal(c.U);
-          const wgMatch = itemDesc.match(/(\d+(?:\.\d+)?)\s*(?:g|กรัม)/i);
-          const weightG = wgMatch ? round2(Number(wgMatch[1])) : 0;
-          const goldBarPrice = round2(numVal(c.T));
-          const exemptBase = round2(numVal(c.W));
-          const taxableBase = round2(c.X && numVal(c.X) > 0 ? numVal(c.X) : saleAmt - exemptBase);
-          const vatAmt = round2(c.Y && numVal(c.Y) > 0 ? numVal(c.Y) : taxableBase * 0.07);
-          vatRows.push({
-            date_iso: lastVatDateIso || getTodayIsoBangkok(),
-            invoice_no: strVal(c.S),
-            buyer_name: '',
-            gold_bar_price: goldBarPrice,
-            weight_g: weightG,
-            item_desc: itemDesc,
-            sale_amount: saleAmt,
-            exempt_base: exemptBase,
-            taxable_base: taxableBase,
-            vat_amount: vatAmt,
-          });
-        }
-      }
-      if (vatRows.length > 0) {
-        db.prepare('DELETE FROM vat_sales_rows WHERE month_key = ?').run(monthKey);
-        const insVat = db.prepare(`
-          INSERT INTO vat_sales_rows (
-            month_key, row_order, date_iso, invoice_no, buyer_name,
-            gold_bar_price, weight_g, item_desc, sale_amount, exempt_base,
-            taxable_base, vat_amount, linked_entry_id, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
-        `);
-        vatRows.forEach((vr, idx) => {
-          insVat.run(
-            monthKey,
-            idx + 1,
-            vr.date_iso,
-            vr.invoice_no,
-            vr.buyer_name,
-            vr.gold_bar_price,
-            vr.weight_g,
-            vr.item_desc,
-            vr.sale_amount,
-            vr.exempt_base,
-            vr.taxable_base,
-            vr.vat_amount,
-            nowIso
-          );
-        });
       }
     }
   }

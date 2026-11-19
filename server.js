@@ -155,13 +155,6 @@ async function handleApi(req, res, parsedUrl) {
   if (method === 'POST' && pathname === '/api/account/vat-report') {
     const body = await parseJsonBody(req);
     const saved = dbMod.saveVatSalesReport(body.month_key, body.rows || []);
-    if (body.sync_sheet !== false) {
-      syncMod.enqueueAndSync('account', 'syncSalesTaxReport', {
-        month_key: saved.monthKey,
-        date_iso: saved.rows[0]?.date_iso || body.date_iso || dbMod.getTodayIsoBangkok(),
-        rows: saved.rows,
-      });
-    }
     return sendJson(res, 200, { ok: true, data: saved });
   }
 

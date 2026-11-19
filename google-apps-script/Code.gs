@@ -197,43 +197,6 @@ function handleAccountSync(action, p) {
     }
   }
 
-  if (action === 'syncSalesTaxReport') {
-    var rows = Array.isArray(p.rows) ? p.rows : [];
-    sheet.getRange('R1').setValue('ใบกำกับภาษีขาย');
-    sheet.getRange('T1').setValue('ราคาทองแท่งต่อบาท');
-    sheet.getRange('U1').setValue('รายการสินค้า');
-    sheet.getRange('V1').setValue('รายการขายทองรูปพรรณ');
-    sheet.getRange('W1').setValue('มูลค่าของฐานภาษีที่ไม่ต้องนำมารวมคำนวณ');
-    sheet.getRange('X1').setValue('มูลค่าของฐานภาษีที่ต้องเสียภาษี');
-    sheet.getRange('Y1').setValue('ภาษีมูลค่าเพิ่ม');
-    sheet.getRange('R2').setValue('วันที่');
-    sheet.getRange('S2').setValue('เล่มที่/เลขที่');
-
-    var clearLast = Math.max(sheet.getLastRow(), rows.length + 5, 35);
-    sheet.getRange(3, 18, clearLast - 2, 8).clearContent(); // Col R (18) to Y (25)
-
-    for (var idx = 0; idx < rows.length; idx++) {
-      var rObj = rows[idx];
-      var rNum = 3 + idx;
-      sheet.getRange(rNum, 18).setValue(rObj.date_label || toThaiDateShort(rObj.date_iso)); // R: วันที่
-      sheet.getRange(rNum, 19).setValue(rObj.invoice_no || ''); // S: เล่มที่/เลขที่
-      if (rObj.gold_bar_price && Number(rObj.gold_bar_price) > 0) {
-        sheet.getRange(rNum, 20).setValue(Number(rObj.gold_bar_price)); // T: ราคาทองแท่งต่อบาท
-      }
-      sheet.getRange(rNum, 21).setValue(rObj.item_desc || ''); // U: รายการสินค้า
-      sheet.getRange(rNum, 22).setValue(Number(rObj.sale_amount) || 0); // V: รายการขายทองรูปพรรณ
-      if (rObj.gold_bar_price && Number(rObj.gold_bar_price) > 0 && rObj.weight_g && Number(rObj.weight_g) > 0) {
-        var wG = Number(rObj.weight_g);
-        sheet.getRange(rNum, 23).setFormula('=ROUND(ROUND(T' + rNum + '*0.98/15.16,0)*15.16*(' + wG + '/15.2),2)'); // W
-      } else {
-        sheet.getRange(rNum, 23).setValue(Number(rObj.exempt_base) || 0); // W
-      }
-      sheet.getRange(rNum, 24).setFormula('=V' + rNum + '-W' + rNum); // X: =V-W
-      sheet.getRange(rNum, 25).setFormula('=ROUND(X' + rNum + '*7%,2)'); // Y: =X*7%
-    }
-    return { monthKey: monthKey, syncedRows: rows.length };
-  }
-
   var dateIso = p.date_iso;
   var summaryRow = findAccountDaySummaryRow(sheet, dateIso);
 

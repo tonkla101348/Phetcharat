@@ -1276,10 +1276,10 @@ function confirmImportVatSales(mode) {
   }
   closeModal();
   renderVatTable();
-  toast(`นำเข้า ${selected.length} รายการลงตารางรายงานภาษีขายแล้ว (อย่าลืมกด "บันทึก & ซิงค์")`);
+  toast(`นำเข้า ${selected.length} รายการลงตารางรายงานภาษีขายแล้ว (อย่าลืมกด "บันทึกรายงานภาษีขาย")`);
 }
 
-async function saveAndSyncVatReport() {
+async function saveVatReport() {
   try {
     const saved = await api('/api/account/vat-report', {
       method: 'POST',
@@ -1287,12 +1287,11 @@ async function saveAndSyncVatReport() {
         month_key: state.vatActiveMonth,
         date_iso: state.vatRows[0]?.date_iso || getTodayIso(),
         rows: state.vatRows,
-        sync_sheet: true,
       }),
     });
     state.vatRows = (saved.rows || []).map((r) => ({ ...r }));
     renderVatTable();
-    toast('บันทึกและส่งรายงานภาษีขาย (คอลัมน์ R–Y) ขึ้น Google Sheet แล้ว');
+    toast('บันทึกรายงานภาษีขายเรียบร้อยแล้ว');
   } catch (err) {
     toast(err.message, 'error');
   }

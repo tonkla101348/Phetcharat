@@ -207,7 +207,7 @@
               <div class="month-tabs" id="account-month-tabs"></div>
             </div>
             <div class="account-actions" style="display:flex;gap:8px;flex-wrap:wrap;">
-              <button class="btn btn-outline" onclick="openVatReportForCurrentMonth()">พิมพ์รายงานภาษีขาย (R–Y)</button>
+              <button class="btn btn-outline" onclick="openVatReportForCurrentMonth()">พิมพ์รายงานภาษีขาย</button>
               <button class="btn btn-emerald" onclick="openAccountEntryModal()">+ เพิ่มรายการรายรับ-รายจ่าย</button>
             </div>
           </div>
@@ -226,7 +226,7 @@
         <div id="account-days-container" class="mt-12"></div>
       </section>
 
-      <!-- ==================== TAB 4B: SALES TAX REPORT (รายงานภาษีขาย R-Y) ==================== -->
+      <!-- ==================== TAB 4B: SALES TAX REPORT (รายงานภาษีขาย) ==================== -->
       <section id="tab-vat" class="tab-panel">
         <div class="card no-print">
           <div class="toolbar" style="justify-content:space-between;">
@@ -234,14 +234,14 @@
               <strong>เดือนภาษี:</strong>
               <select id="vat-year-select" class="select-input" onchange="selectVatYear(this.value)"></select>
               <select id="vat-month-select" class="select-input" onchange="selectVatMonth(this.value)"></select>
-              <span class="muted">ราคาทองแท่งตั้งต้น (Col T):</span>
+              <span class="muted">ราคาทองแท่งตั้งต้น:</span>
               <input type="number" step="50" id="vat-default-bar-price" class="select-input" placeholder="เช่น 62600" style="width:120px;" />
               <button type="button" class="btn btn-sm btn-outline" onclick="applyDefaultGoldBarPrice()">คำนวณฐานภาษียกเว้นจากราคาทองแท่ง</button>
             </div>
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
               <button type="button" class="btn btn-outline" onclick="openImportVatSalesModal()">ดึงรายการขายทองจากสมุดบัญชี</button>
               <button type="button" class="btn btn-outline" onclick="addVatReportRow()">+ เพิ่มแถว</button>
-              <button type="button" class="btn btn-primary" onclick="saveAndSyncVatReport()">บันทึก &amp; ซิงค์ลง Google Sheet (R–Y)</button>
+              <button type="button" class="btn btn-primary" onclick="saveVatReport()">บันทึกรายงานภาษีขาย</button>
               <button type="button" class="btn btn-gold" onclick="printVatReport()">สั่งพิมพ์รายงานภาษีขาย (A4)</button>
             </div>
           </div>
@@ -254,7 +254,7 @@
               <input type="checkbox" id="vat-show-total-row" checked onchange="renderVatTable()" />
               แสดงแถวรวมท้ายตาราง
             </label>
-            <span class="muted">สูตรคอลัมน์ R–Y: W = ROUND(ROUND(T×0.98/15.16, 0)×15.16×(นน./15.2), 2) • X = V − W • Y = ROUND(X×7%, 2)</span>
+            <span class="muted">คำนวณฐานภาษียกเว้นและภาษีมูลค่าเพิ่ม 7% อัตโนมัติจากราคาทองแท่งต่อบาทและน้ำหนัก</span>
           </div>
         </div>
 
