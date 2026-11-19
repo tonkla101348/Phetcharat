@@ -1511,20 +1511,44 @@ function calcGoldExemptBase(ornamentPrice, weightG) {
   return round2(price * (w / 15.2));
 }
 
+const THAI_MONTHS_FULL = [
+  'มกราคม',
+  'กุมภาพันธ์',
+  'มีนาคม',
+  'เมษายน',
+  'พฤษภาคม',
+  'มิถุนายน',
+  'กรกฎาคม',
+  'สิงหาคม',
+  'กันยายน',
+  'ตุลาคม',
+  'พฤศจิกายน',
+  'ธันวาคม',
+];
+
 function parseMonthShortAndYearShort(monthKey, activeYear) {
   const s = String(monthKey || '').trim();
   let monthShort = '';
+  let monthFull = '';
   for (let i = 0; i < THAI_MONTHS_SHORT.length; i++) {
     const mName = THAI_MONTHS_SHORT[i];
     const mNoDot = mName.replace(/\.$/, '');
-    if (s.includes(mName) || s.includes(mNoDot)) {
+    const mFull = THAI_MONTHS_FULL[i];
+    if (s.includes(mFull) || s.includes(mName) || s.includes(mNoDot)) {
       monthShort = mName;
+      monthFull = mFull;
       break;
     }
   }
   const beYear = getBeYearForMonthOrder(getMonthOrderForKey(s)) || Number(activeYear) || 2569;
-  const yearShort = String(beYear).slice(-2);
-  return { monthShort: monthShort || s, yearShort };
+  const yearFull = String(beYear);
+  const yearShort = yearFull.slice(-2);
+  return {
+    monthShort: monthShort || s,
+    monthFull: monthFull || monthShort || s,
+    yearShort,
+    yearFull,
+  };
 }
 
 function getVatSalesReport(monthKey, yearBe) {
@@ -1561,7 +1585,7 @@ function getVatSalesReport(monthKey, yearBe) {
     totals.vat_amount = round2(totals.vat_amount + (Number(r.vat_amount) || 0));
   }
 
-  const { monthShort, yearShort } = parseMonthShortAndYearShort(targetMonthKey, accView.activeYear);
+  const { monthShort, monthFull, yearShort, yearFull } = parseMonthShortAndYearShort(targetMonthKey, accView.activeYear);
 
   return {
     availableYears: accView.availableYears,
@@ -1569,7 +1593,9 @@ function getVatSalesReport(monthKey, yearBe) {
     months: accView.months,
     monthKey: targetMonthKey,
     monthShort,
+    monthFull,
     yearShort,
+    yearFull,
     rows,
     totals,
     candidateSales,

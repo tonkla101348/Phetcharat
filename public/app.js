@@ -18,6 +18,39 @@ const state = {
 };
 
 const THAI_MONTHS = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+const THAI_MONTHS_FULL = [
+  'มกราคม',
+  'กุมภาพันธ์',
+  'มีนาคม',
+  'เมษายน',
+  'พฤษภาคม',
+  'มิถุนายน',
+  'กรกฎาคม',
+  'สิงหาคม',
+  'กันยายน',
+  'ตุลาคม',
+  'พฤศจิกายน',
+  'ธันวาคม',
+];
+
+function formatMonthKeyFull(monthKey, fallbackYear) {
+  const s = String(monthKey || '').trim();
+  if (!s) return '';
+  let monthFull = '';
+  for (let i = 0; i < THAI_MONTHS.length; i++) {
+    const mShort = THAI_MONTHS[i];
+    const mNoDot = mShort.replace(/\.$/, '');
+    if (s.includes(THAI_MONTHS_FULL[i]) || s.includes(mShort) || s.includes(mNoDot)) {
+      monthFull = THAI_MONTHS_FULL[i];
+      break;
+    }
+  }
+  const ym = s.match(/(\d{2,4})\s*$/);
+  let yearFull = ym ? String(Number(ym[1]) < 100 ? Number(ym[1]) + 2500 : Number(ym[1])) : '';
+  if (!yearFull && fallbackYear) yearFull = String(fallbackYear);
+  if (monthFull && yearFull) return `${monthFull} ${yearFull}`;
+  return monthFull || s;
+}
 
 function esc(str) {
   return String(str ?? '')
@@ -833,11 +866,16 @@ async function loadVatView() {
     const mSel = document.getElementById('vat-month-select');
     if (mSel) {
       mSel.innerHTML = (d.months || [])
-        .map((m) => `<option value="${esc(m.month_key)}" ${m.month_key === state.vatActiveMonth ? 'selected' : ''}>${esc(m.month_key)}</option>`)
+        .map(
+          (m) =>
+            `<option value="${esc(m.month_key)}" ${m.month_key === state.vatActiveMonth ? 'selected' : ''}>${esc(
+              formatMonthKeyFull(m.month_key, state.vatActiveYear)
+            )}</option>`
+        )
         .join('');
     }
-    document.getElementById('vat-print-month').textContent = d.monthShort || '';
-    document.getElementById('vat-print-year').textContent = d.yearShort || '';
+    document.getElementById('vat-print-month').textContent = d.monthFull || d.monthShort || '';
+    document.getElementById('vat-print-year').textContent = d.yearFull || d.yearShort || '';
     renderVatTable();
   } catch (err) {
     toast('โหลดรายงานภาษีขายไม่สำเร็จ: ' + err.message, 'error');
@@ -1195,7 +1233,7 @@ function openImportVatSalesModal() {
     .join('');
 
   openModal(
-    `ดึงรายการขายทองจากสมุดบัญชี (${state.vatActiveMonth})`,
+    `ดึงรายการขายทองจากสมุดบัญชี (${formatMonthKeyFull(state.vatActiveMonth, state.vatActiveYear)})`,
     `
     <div class="info-banner">
       เลือกรายการขายทองรูปพรรณที่จะนำเข้าในรายงานภาษีขาย (ระบบติ๊กเลือกเฉพาะรายการทองรูปพรรณให้อัตโนมัติ ไม่รวมแท่ง/ออมทอง/เครื่องเงิน)
