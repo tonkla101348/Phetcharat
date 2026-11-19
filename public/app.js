@@ -980,7 +980,9 @@ function renderVatTable() {
     })
     .join('');
 
-  tbody.innerHTML = rowsHtml;
+  tbody.innerHTML =
+    rowsHtml ||
+    '<tr class="no-print"><td colspan="9" class="center muted" style="padding:18px;">ยังไม่มีรายการในเดือนนี้ — กด "ดึงรายการขายทองจากสมุดบัญชี" หรือ "+ เพิ่มแถว"</td></tr>';
   initDateInputs(tbody);
   renderVatFooter();
   renderVatPrintPages();
