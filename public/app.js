@@ -55,6 +55,42 @@ function formatMonthKeyFull(monthKey, fallbackYear) {
   return monthFull || s;
 }
 
+const DEFAULT_PAGE_TITLE = 'ห้างทองเพชรรัตน์ — ระบบจัดการจำนำทอง บัญชี และสต๊อกทอง';
+
+function getActivePrintDocumentTitle() {
+  if (state.activeTab === 'vat') {
+    let mShort = state.vatCache?.monthShort || '';
+    if (!mShort) {
+      const mFullText = String(document.getElementById('vat-print-month')?.textContent || '').trim();
+      const idx = THAI_MONTHS_FULL.indexOf(mFullText);
+      if (idx >= 0) mShort = THAI_MONTHS[idx];
+    }
+    return mShort ? `รายงานภาษีขาย ${mShort}` : 'รายงานภาษีขาย';
+  }
+  if (state.activeTab === 'gta') {
+    let mShort = THAI_MONTHS[(Number(state.gtaMonthNum) || 0) - 1] || '';
+    if (!mShort) {
+      const mFullText = String(document.getElementById('gta-print-month')?.textContent || '').trim();
+      const idx = THAI_MONTHS_FULL.indexOf(mFullText);
+      if (idx >= 0) mShort = THAI_MONTHS[idx];
+    }
+    return mShort
+      ? `ตารางการซื้อ-ขายทองรูปพรรณตามประกาศของสมาคมค้าทองคำ ${mShort}`
+      : 'ตารางการซื้อ-ขายทองรูปพรรณตามประกาศของสมาคมค้าทองคำ';
+  }
+  return DEFAULT_PAGE_TITLE;
+}
+
+window.addEventListener('beforeprint', () => {
+  if (state.activeTab === 'vat') renderVatPrintPages();
+  else if (state.activeTab === 'gta') renderGtaPrintPages();
+  document.title = getActivePrintDocumentTitle();
+});
+
+window.addEventListener('afterprint', () => {
+  document.title = DEFAULT_PAGE_TITLE;
+});
+
 function esc(str) {
   return String(str ?? '')
     .replace(/&/g, '&amp;')
@@ -171,6 +207,7 @@ function debounce(fn, ms = 220) {
 
 function switchTab(tabName) {
   state.activeTab = tabName;
+  document.title = DEFAULT_PAGE_TITLE;
   document.querySelectorAll('.nav-btn').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.tab === tabName);
   });
@@ -1095,6 +1132,7 @@ function renderVatPrintPages() {
 
 function printVatReport() {
   renderVatPrintPages();
+  document.title = getActivePrintDocumentTitle();
   window.print();
 }
 
@@ -1752,6 +1790,7 @@ async function saveGtaReport() {
 
 function printGtaReport() {
   renderGtaPrintPages();
+  document.title = getActivePrintDocumentTitle();
   window.print();
 }
 
