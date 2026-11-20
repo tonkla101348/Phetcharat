@@ -162,13 +162,48 @@ async function handleApi(req, res, parsedUrl) {
   if (method === 'GET' && pathname === '/api/gold-prices') {
     const month = parsedUrl.searchParams.get('month') || '';
     const year = parsedUrl.searchParams.get('year') || '';
+    const monthNum = parsedUrl.searchParams.get('month_num') || '';
     const refresh = parsedUrl.searchParams.get('refresh') === '1';
     const data = await goldPriceMod.fetchAndCacheMonthGoldPrices({
       monthKey: month,
       yearBe: year ? Number(year) : 0,
+      monthNum: monthNum ? Number(monthNum) : 0,
       forceRefresh: refresh,
     });
     return sendJson(res, 200, { ok: true, data });
+  }
+
+  if (method === 'GET' && pathname === '/api/gta-price-report') {
+    const todayIso = dbMod.getTodayIsoBangkok();
+    const [nowYearCe, nowMonth] = todayIso.split('-').map(Number);
+    const yearBe = Number(parsedUrl.searchParams.get('year') || 0) || nowYearCe + 543;
+    const monthNum = Number(parsedUrl.searchParams.get('month_num') || 0) || nowMonth;
+    const refresh = parsedUrl.searchParams.get('refresh') === '1';
+
+    let fetchedPrices = {};
+    let fromCache = false;
+    let warning = '';
+    try {
+      const gp = await goldPriceMod.fetchAndCacheMonthGoldPrices({
+        yearBe,
+        monthNum,
+        forceRefresh: refresh,
+      });
+      fetchedPrices = gp.prices || {};
+      fromCache = Boolean(gp.fromCache);
+      warning = gp.warning || '';
+    } catch (err) {
+      warning = err.message || 'ไม่สามารถดึงราคาทองคำจากเว็บได้';
+    }
+
+    const report = dbMod.getGtaPriceReport(yearBe, monthNum, fetchedPrices, refresh);
+    return sendJson(res, 200, { ok: true, data: { ...report, fromCache, warning } });
+  }
+
+  if (method === 'POST' && pathname === '/api/gta-price-report') {
+    const body = await parseJsonBody(req);
+    const saved = dbMod.saveGtaPriceReport(body.year_be, body.month_num, body.rows || []);
+    return sendJson(res, 200, { ok: true, data: saved });
   }
 
   if (method === 'POST' && pathname === '/api/account/entry') {

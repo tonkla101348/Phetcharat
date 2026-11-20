@@ -1073,6 +1073,10 @@ input[type="date"].dmy-enhanced::-webkit-calendar-picker-indicator {
   font-variant-numeric: tabular-nums;
 }
 
+.vat-table td.center {
+  text-align: center;
+}
+
 .vat-table td input {
   width: 100%;
   padding: 3px 5px;
@@ -1085,6 +1089,10 @@ input[type="date"].dmy-enhanced::-webkit-calendar-picker-indicator {
 
 .vat-table td input.num {
   text-align: right;
+}
+
+.vat-table td input.center {
+  text-align: center;
 }
 
 .vat-table tfoot td {
@@ -1117,7 +1125,7 @@ input[type="date"].dmy-enhanced::-webkit-calendar-picker-indicator {
   .no-print,
   .toast-container,
   .modal-backdrop,
-  .tab-panel:not(#tab-vat) {
+  .tab-panel:not(.active) {
     display: none !important;
   }
   .content {
@@ -1125,7 +1133,7 @@ input[type="date"].dmy-enhanced::-webkit-calendar-picker-indicator {
     margin: 0 !important;
     max-width: none !important;
   }
-  #tab-vat {
+  .tab-panel.active {
     display: block !important;
   }
   .vat-print-pages {

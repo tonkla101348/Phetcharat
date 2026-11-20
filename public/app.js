@@ -13,6 +13,9 @@ const state = {
   vatActiveMonth: '',
   vatCache: null,
   vatRows: [],
+  gtaYearBe: 0,
+  gtaMonthNum: 0,
+  gtaRows: [],
   stockCache: null,
   syncCache: null,
 };
@@ -179,6 +182,7 @@ function switchTab(tabName) {
   else if (tabName === 'overdue') loadOverdueTable();
   else if (tabName === 'account') loadAccountView();
   else if (tabName === 'vat') loadVatView();
+  else if (tabName === 'gta') loadGtaView();
   else if (tabName === 'stock') loadStockView();
   else if (tabName === 'sync') loadSyncView();
 }
@@ -1444,6 +1448,235 @@ async function saveVatReport() {
   } catch (err) {
     toast(err.message, 'error');
   }
+}
+
+/* ==================== GTA GOLD ASSOCIATION PRICE TABLE ==================== */
+function initGtaSelectors(activeYearBe, activeMonthNum) {
+  const mSel = document.getElementById('gta-month-select');
+  if (mSel) {
+    mSel.innerHTML = THAI_MONTHS_FULL.map(
+      (name, i) => `<option value="${i + 1}" ${i + 1 === activeMonthNum ? 'selected' : ''}>${esc(name)}</option>`
+    ).join('');
+  }
+  const yrSel = document.getElementById('gta-year-select');
+  if (yrSel) {
+    const currentBe = Number(getTodayIso().slice(0, 4)) + 543;
+    const maxBe = Math.max(activeYearBe, currentBe) + 1;
+    const years = [];
+    for (let y = 2566; y <= maxBe; y++) years.push(y);
+    yrSel.innerHTML = years
+      .map((y) => `<option value="${y}" ${y === activeYearBe ? 'selected' : ''}>พ.ศ. ${y}</option>`)
+      .join('');
+  }
+}
+
+function selectGtaPeriod() {
+  const yrSel = document.getElementById('gta-year-select');
+  const mSel = document.getElementById('gta-month-select');
+  if (yrSel && yrSel.value) state.gtaYearBe = Number(yrSel.value);
+  if (mSel && mSel.value) state.gtaMonthNum = Number(mSel.value);
+  loadGtaView(false);
+}
+
+async function loadGtaView(forceRefresh = false) {
+  try {
+    const params = new URLSearchParams();
+    if (state.gtaYearBe) params.set('year', String(state.gtaYearBe));
+    if (state.gtaMonthNum) params.set('month_num', String(state.gtaMonthNum));
+    if (forceRefresh) params.set('refresh', '1');
+    const qs = params.toString();
+    const d = await api(`/api/gta-price-report${qs ? '?' + qs : ''}`);
+
+    const samePeriod = state.gtaYearBe === Number(d.yearBe) && state.gtaMonthNum === Number(d.monthNum);
+    state.gtaYearBe = Number(d.yearBe);
+    state.gtaMonthNum = Number(d.monthNum);
+
+    if (forceRefresh && samePeriod && state.gtaRows.length === (d.rows || []).length) {
+      const byDay = new Map((d.rows || []).map((r) => [r.day_no, r]));
+      state.gtaRows = state.gtaRows.map((cur) => {
+        const srv = byDay.get(cur.day_no);
+        if (!srv) return cur;
+        return {
+          ...cur,
+          bar_buy: srv.bar_buy !== null ? srv.bar_buy : cur.bar_buy,
+          bar_sell: srv.bar_sell !== null ? srv.bar_sell : cur.bar_sell,
+          orn_buy: srv.orn_buy !== null ? srv.orn_buy : cur.orn_buy,
+          orn_sell: srv.orn_sell !== null ? srv.orn_sell : cur.orn_sell,
+        };
+      });
+    } else {
+      state.gtaRows = (d.rows || []).map((r) => ({ ...r }));
+    }
+
+    initGtaSelectors(state.gtaYearBe, state.gtaMonthNum);
+    const mEl = document.getElementById('gta-print-month');
+    const yEl = document.getElementById('gta-print-year');
+    if (mEl) mEl.textContent = d.monthFull || '';
+    if (yEl) yEl.textContent = d.yearFull || '';
+
+    renderGtaTable();
+    if (d.warning) {
+      toast(d.warning, 'error');
+    } else if (forceRefresh) {
+      toast(`ดึงราคาสมาคมค้าทองคำ (${d.monthFull} ${d.yearFull}) เรียบร้อยแล้ว`);
+    }
+  } catch (err) {
+    toast('โหลดตารางราคาสมาคมฯ ไม่สำเร็จ: ' + err.message, 'error');
+  }
+}
+
+async function refreshGtaPrices() {
+  const btn = document.getElementById('gta-fetch-btn');
+  const orig = btn ? btn.textContent : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'กำลังดึงราคา...';
+  }
+  try {
+    await loadGtaView(true);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = orig || 'ดึงราคาสมาคมฯ ล่าสุด';
+    }
+  }
+}
+
+function onGtaRowChange(idx, field, val) {
+  const row = state.gtaRows[idx];
+  if (!row) return;
+  if (field === 'gold_percent' || field === 'note') {
+    row[field] = String(val || '').trim();
+  } else {
+    const raw = String(val ?? '').trim();
+    row[field] = raw === '' ? null : round2Client(Number(raw) || 0);
+  }
+  renderGtaPrintPages();
+}
+
+function fmtGtaPriceCell(val) {
+  const num = Number(val);
+  return Number.isFinite(num) && num > 0 ? fmtVatDec(num) : '';
+}
+
+function renderGtaTable() {
+  const tbody = document.getElementById('gta-tbody');
+  if (!tbody) return;
+
+  tbody.innerHTML = state.gtaRows
+    .map(
+      (r, idx) => `
+      <tr>
+        <td class="center"><strong>${r.day_no}</strong></td>
+        <td class="center">
+          <input type="text" class="center" value="${esc(r.gold_percent || '')}" placeholder="" onchange="onGtaRowChange(${idx}, 'gold_percent', this.value)" />
+        </td>
+        <td class="num">
+          <input type="number" step="0.01" class="num" value="${r.bar_buy ?? ''}" onchange="onGtaRowChange(${idx}, 'bar_buy', this.value)" />
+        </td>
+        <td class="num">
+          <input type="number" step="0.01" class="num" value="${r.bar_sell ?? ''}" onchange="onGtaRowChange(${idx}, 'bar_sell', this.value)" />
+        </td>
+        <td class="num">
+          <input type="number" step="0.01" class="num" value="${r.orn_buy ?? ''}" onchange="onGtaRowChange(${idx}, 'orn_buy', this.value)" />
+        </td>
+        <td class="num">
+          <input type="number" step="0.01" class="num" value="${r.orn_sell ?? ''}" onchange="onGtaRowChange(${idx}, 'orn_sell', this.value)" />
+        </td>
+        <td>
+          <input type="text" value="${esc(r.note || '')}" placeholder="" onchange="onGtaRowChange(${idx}, 'note', this.value)" />
+        </td>
+      </tr>
+    `
+    )
+    .join('');
+
+  renderGtaPrintPages();
+}
+
+function renderGtaPrintPages() {
+  const container = document.getElementById('gta-print-pages');
+  if (!container) return;
+
+  const monthFull = document.getElementById('gta-print-month')?.textContent || '';
+  const yearFull = document.getElementById('gta-print-year')?.textContent || '';
+
+  const rowsHtml = state.gtaRows
+    .map(
+      (r) => `
+      <tr>
+        <td class="center">${r.day_no}</td>
+        <td class="center">${esc(r.gold_percent || '')}</td>
+        <td class="num">${esc(fmtGtaPriceCell(r.bar_buy))}</td>
+        <td class="num">${esc(fmtGtaPriceCell(r.bar_sell))}</td>
+        <td class="num">${esc(fmtGtaPriceCell(r.orn_buy))}</td>
+        <td class="num">${esc(fmtGtaPriceCell(r.orn_sell))}</td>
+        <td>${esc(r.note || '')}</td>
+      </tr>
+    `
+    )
+    .join('');
+
+  container.innerHTML = `
+    <div class="vat-print-page">
+      <div class="vat-doc-header">
+        <div class="vat-doc-title">ตารางการซื้อ-ขายทองรูปพรรณตามประกาศของสมาคมค้าทองคำ</div>
+        <div class="vat-doc-period">
+          ประจำเดือน <span class="vat-period-blank">${esc(monthFull)}</span>
+          พ.ศ. <span class="vat-period-blank">${esc(yearFull)}</span>
+        </div>
+        <div class="vat-company-line">
+          <span>ชื่อผู้ประกอบการ : <strong>บริษัท เพชรรัตน์ (บ้านกรวด) จำกัด</strong></span>
+          <span>เลขประจำตัวผู้เสียภาษีอากร <strong>0315559001675</strong></span>
+        </div>
+        <div class="vat-company-line">
+          <span>ชื่อสถานประกอบการ : <strong>ห้างทองเพชรรัตน์ &nbsp; สำนักงานใหญ่</strong></span>
+        </div>
+      </div>
+
+      <table class="vat-table gta-table">
+        <thead>
+          <tr>
+            <th rowspan="2" style="width:7%;">วันที่</th>
+            <th rowspan="2" style="width:13%;">เปอร์เซ็นต์ทอง</th>
+            <th colspan="2">ทองคำแท่ง</th>
+            <th colspan="2">ทองรูปพรรณ</th>
+            <th rowspan="2" style="width:18%;">หมายเหตุ</th>
+          </tr>
+          <tr>
+            <th style="width:15.5%;">ราคารับซื้อ (บาท)</th>
+            <th style="width:15.5%;">ราคาขาย (บาท)</th>
+            <th style="width:15.5%;">ราคารับซื้อ (บาท)</th>
+            <th style="width:15.5%;">ราคาขาย (บาท)</th>
+          </tr>
+        </thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+async function saveGtaReport() {
+  try {
+    const saved = await api('/api/gta-price-report', {
+      method: 'POST',
+      body: JSON.stringify({
+        year_be: state.gtaYearBe,
+        month_num: state.gtaMonthNum,
+        rows: state.gtaRows,
+      }),
+    });
+    state.gtaRows = (saved.rows || []).map((r) => ({ ...r }));
+    renderGtaTable();
+    toast('บันทึกตารางราคาสมาคมค้าทองคำเรียบร้อยแล้ว');
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+function printGtaReport() {
+  renderGtaPrintPages();
+  window.print();
 }
 
 /* ==================== STOCK (Stock ทอง) ==================== */

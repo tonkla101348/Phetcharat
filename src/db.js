@@ -291,6 +291,22 @@ function initSchema() {
       source TEXT DEFAULT 'ราคาทองคำวันนี้.com',
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS gta_price_rows (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ym_key TEXT NOT NULL,
+      day_no INTEGER NOT NULL,
+      date_iso TEXT NOT NULL,
+      gold_percent TEXT DEFAULT '',
+      bar_buy REAL,
+      bar_sell REAL,
+      orn_buy REAL,
+      orn_sell REAL,
+      note TEXT DEFAULT '',
+      updated_at TEXT DEFAULT '',
+      UNIQUE(ym_key, day_no)
+    );
+    CREATE INDEX IF NOT EXISTS idx_gta_price_ym ON gta_price_rows(ym_key, day_no);
   `);
 
   const defaults = {
@@ -1738,6 +1754,137 @@ function getGoldDailyPricesForMonth(yearCe, monthNum) {
   return { prices, prevFallback, daysCount: rows.length };
 }
 
+function getGtaPriceReport(yearBe, monthNum, fetchedPricesMap = {}, overwritePrices = false) {
+  initSchema();
+  const todayIso = getTodayIsoBangkok();
+  const [nowYearCe, nowMonth] = todayIso.split('-').map(Number);
+
+  let targetYearBe = Number(yearBe) || 0;
+  let targetMonthNum = Number(monthNum) || 0;
+  if (!targetYearBe || targetYearBe < 2400) targetYearBe = nowYearCe + 543;
+  if (!targetMonthNum || targetMonthNum < 1 || targetMonthNum > 12) targetMonthNum = nowMonth;
+
+  const yearCe = targetYearBe - 543;
+  const ymKey = `${yearCe}-${String(targetMonthNum).padStart(2, '0')}`;
+  const daysInMonth = new Date(yearCe, targetMonthNum, 0).getDate();
+  const monthFull = THAI_MONTHS_FULL[targetMonthNum - 1] || '';
+  const yearFull = String(targetYearBe);
+
+  const savedList = db.prepare('SELECT * FROM gta_price_rows WHERE ym_key = ? ORDER BY day_no ASC').all(ymKey);
+  const savedMap = new Map();
+  for (const s of savedList) {
+    savedMap.set(Number(s.day_no), s);
+  }
+
+  const rows = [];
+  for (let dayNo = 1; dayNo <= daysInMonth; dayNo++) {
+    const dateIso = `${ymKey}-${String(dayNo).padStart(2, '0')}`;
+    const saved = savedMap.get(dayNo);
+    const fetched = fetchedPricesMap ? fetchedPricesMap[dateIso] : null;
+    const savedHasAnyPrice = Boolean(
+      saved &&
+        (Number(saved.bar_buy) > 0 ||
+          Number(saved.bar_sell) > 0 ||
+          Number(saved.orn_buy) > 0 ||
+          Number(saved.orn_sell) > 0)
+    );
+
+    let barBuy = null;
+    let barSell = null;
+    let ornBuy = null;
+    let ornSell = null;
+    if (fetched && (overwritePrices || !savedHasAnyPrice)) {
+      barBuy = Number(fetched.bar_buy) > 0 ? Number(fetched.bar_buy) : null;
+      barSell = Number(fetched.bar_sell) > 0 ? Number(fetched.bar_sell) : null;
+      ornBuy = Number(fetched.orn_tax_base) > 0 ? Number(fetched.orn_tax_base) : null;
+      ornSell = Number(fetched.orn_sell) > 0 ? Number(fetched.orn_sell) : null;
+    } else if (saved) {
+      barBuy = saved.bar_buy !== null && saved.bar_buy !== undefined && Number(saved.bar_buy) > 0 ? Number(saved.bar_buy) : null;
+      barSell = saved.bar_sell !== null && saved.bar_sell !== undefined && Number(saved.bar_sell) > 0 ? Number(saved.bar_sell) : null;
+      ornBuy = saved.orn_buy !== null && saved.orn_buy !== undefined && Number(saved.orn_buy) > 0 ? Number(saved.orn_buy) : null;
+      ornSell = saved.orn_sell !== null && saved.orn_sell !== undefined && Number(saved.orn_sell) > 0 ? Number(saved.orn_sell) : null;
+    }
+
+    rows.push({
+      day_no: dayNo,
+      date_iso: dateIso,
+      gold_percent: saved ? String(saved.gold_percent || '') : '',
+      bar_buy: barBuy,
+      bar_sell: barSell,
+      orn_buy: ornBuy,
+      orn_sell: ornSell,
+      note: saved ? String(saved.note || '') : '',
+    });
+  }
+
+  return {
+    yearBe: targetYearBe,
+    yearCe,
+    monthNum: targetMonthNum,
+    monthFull,
+    yearFull,
+    ymKey,
+    daysInMonth,
+    rows,
+  };
+}
+
+function saveGtaPriceReport(yearBe, monthNum, rowsInput) {
+  initSchema();
+  const todayIso = getTodayIsoBangkok();
+  const [nowYearCe, nowMonth] = todayIso.split('-').map(Number);
+
+  let targetYearBe = Number(yearBe) || 0;
+  let targetMonthNum = Number(monthNum) || 0;
+  if (!targetYearBe || targetYearBe < 2400) targetYearBe = nowYearCe + 543;
+  if (!targetMonthNum || targetMonthNum < 1 || targetMonthNum > 12) targetMonthNum = nowMonth;
+
+  const yearCe = targetYearBe - 543;
+  const ymKey = `${yearCe}-${String(targetMonthNum).padStart(2, '0')}`;
+  const daysInMonth = new Date(yearCe, targetMonthNum, 0).getDate();
+  const list = Array.isArray(rowsInput) ? rowsInput : [];
+  const nowIso = new Date().toISOString();
+
+  const parsePriceOrNull = (val) => {
+    if (val === '' || val === null || val === undefined) return null;
+    const n = round2(Number(val));
+    return Number.isFinite(n) && n > 0 ? n : null;
+  };
+
+  db.exec('BEGIN');
+  try {
+    db.prepare('DELETE FROM gta_price_rows WHERE ym_key = ?').run(ymKey);
+    const ins = db.prepare(`
+      INSERT INTO gta_price_rows (
+        ym_key, day_no, date_iso, gold_percent, bar_buy, bar_sell, orn_buy, orn_sell, note, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    for (const r of list) {
+      const dayNo = Number(r.day_no);
+      if (!Number.isInteger(dayNo) || dayNo < 1 || dayNo > daysInMonth) continue;
+      const dateIso = `${ymKey}-${String(dayNo).padStart(2, '0')}`;
+      ins.run(
+        ymKey,
+        dayNo,
+        dateIso,
+        String(r.gold_percent || '').trim(),
+        parsePriceOrNull(r.bar_buy),
+        parsePriceOrNull(r.bar_sell),
+        parsePriceOrNull(r.orn_buy),
+        parsePriceOrNull(r.orn_sell),
+        String(r.note || '').trim(),
+        nowIso
+      );
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+
+  return getGtaPriceReport(targetYearBe, targetMonthNum, {}, false);
+}
+
 function addAccountEntry(input) {
   return insertAccountEntryInternal(input);
 }
@@ -2137,6 +2284,8 @@ module.exports = {
   saveVatSalesReport,
   upsertGoldDailyPrices,
   getGoldDailyPricesForMonth,
+  getGtaPriceReport,
+  saveGtaPriceReport,
   getMonthOrderForKey,
   getBeYearForMonthOrder,
   addAccountEntry,

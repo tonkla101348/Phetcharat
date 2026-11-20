@@ -42,6 +42,7 @@
       <button class="nav-btn" data-tab="overdue" onclick="switchTab('overdue')">คนหลุดจำ <span id="nav-badge-overdue" class="nav-badge badge-danger"></span></button>
       <button class="nav-btn" data-tab="account" onclick="switchTab('account')">บัญชีรายรับ-รายจ่าย</button>
       <button class="nav-btn" data-tab="vat" onclick="switchTab('vat')">รายงานภาษีขาย</button>
+      <button class="nav-btn" data-tab="gta" onclick="switchTab('gta')">ตารางราคาสมาคมฯ</button>
       <button class="nav-btn" data-tab="stock" onclick="switchTab('stock')">สต๊อกทอง (Stock)</button>
       <button class="nav-btn" data-tab="sync" onclick="switchTab('sync')">เชื่อมต่อ Google Sheets</button>
     </nav>
@@ -297,6 +298,65 @@
           </table>
         </div>
         <div id="vat-print-pages" class="vat-print-pages"></div>
+      </section>
+
+      <!-- ==================== TAB 4C: GTA GOLD ASSOCIATION PRICE TABLE ==================== -->
+      <section id="tab-gta" class="tab-panel">
+        <div class="card no-print">
+          <div class="toolbar" style="justify-content:space-between;">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <strong>ประจำเดือน:</strong>
+              <select id="gta-month-select" class="select-input" onchange="selectGtaPeriod()"></select>
+              <strong>พ.ศ.:</strong>
+              <select id="gta-year-select" class="select-input" onchange="selectGtaPeriod()"></select>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <button type="button" class="btn btn-emerald" id="gta-fetch-btn" onclick="refreshGtaPrices()">ดึงราคาสมาคมฯ ล่าสุด</button>
+              <button type="button" class="btn btn-primary" onclick="saveGtaReport()">บันทึกตารางราคา</button>
+              <button type="button" class="btn btn-gold" onclick="printGtaReport()">สั่งพิมพ์ตารางราคา (A4)</button>
+            </div>
+          </div>
+          <div style="padding:8px 16px;border-top:1px solid #f0ebe1;font-size:12.5px;">
+            <span class="muted">ดึงราคาปิดวันอัตโนมัติจาก ราคาทองคำวันนี้.com (ช่อง "ราคารับซื้อ" ของทองรูปพรรณดึงจาก "ฐานภาษี") • ช่องเปอร์เซ็นต์ทองและหมายเหตุพิมพ์กรอกเองได้</span>
+          </div>
+        </div>
+
+        <div class="vat-paper-sheet screen-only mt-12">
+          <div class="vat-doc-header">
+            <div class="vat-doc-title">ตารางการซื้อ-ขายทองรูปพรรณตามประกาศของสมาคมค้าทองคำ</div>
+            <div class="vat-doc-period">
+              ประจำเดือน <span class="vat-period-blank" id="gta-print-month">พฤศจิกายน</span>
+              พ.ศ. <span class="vat-period-blank" id="gta-print-year">2569</span>
+            </div>
+            <div class="vat-company-line">
+              <span>ชื่อผู้ประกอบการ : <strong>บริษัท เพชรรัตน์ (บ้านกรวด) จำกัด</strong></span>
+              <span>เลขประจำตัวผู้เสียภาษีอากร <strong>0315559001675</strong></span>
+            </div>
+            <div class="vat-company-line">
+              <span>ชื่อสถานประกอบการ : <strong>ห้างทองเพชรรัตน์ &nbsp; สำนักงานใหญ่</strong></span>
+            </div>
+          </div>
+
+          <table class="vat-table gta-table">
+            <thead>
+              <tr>
+                <th rowspan="2" style="width:7%;">วันที่</th>
+                <th rowspan="2" style="width:13%;">เปอร์เซ็นต์ทอง</th>
+                <th colspan="2">ทองคำแท่ง</th>
+                <th colspan="2">ทองรูปพรรณ</th>
+                <th rowspan="2" style="width:18%;">หมายเหตุ</th>
+              </tr>
+              <tr>
+                <th style="width:15.5%;">ราคารับซื้อ (บาท)</th>
+                <th style="width:15.5%;">ราคาขาย (บาท)</th>
+                <th style="width:15.5%;">ราคารับซื้อ (บาท)</th>
+                <th style="width:15.5%;">ราคาขาย (บาท)</th>
+              </tr>
+            </thead>
+            <tbody id="gta-tbody"></tbody>
+          </table>
+        </div>
+        <div id="gta-print-pages" class="vat-print-pages"></div>
       </section>
 
       <!-- ==================== TAB 5: GOLD STOCK (Stock ทอง) ==================== -->
