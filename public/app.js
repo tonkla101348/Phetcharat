@@ -1547,10 +1547,25 @@ function onGtaRowChange(idx, field, val) {
   if (!row) return;
   if (field === 'gold_percent' || field === 'note') {
     row[field] = String(val || '').trim();
+    if (field === 'note') {
+      const chip = document.getElementById(`gta-note-closed-${idx}`);
+      if (chip) chip.classList.toggle('active', row.note === 'ปิด');
+    }
   } else {
     const raw = String(val ?? '').trim();
     row[field] = raw === '' ? null : round2Client(Number(raw) || 0);
   }
+  renderGtaPrintPages();
+}
+
+function toggleGtaClosedNote(idx) {
+  const row = state.gtaRows[idx];
+  if (!row) return;
+  row.note = row.note === 'ปิด' ? '' : 'ปิด';
+  const input = document.getElementById(`gta-note-${idx}`);
+  const chip = document.getElementById(`gta-note-closed-${idx}`);
+  if (input) input.value = row.note;
+  if (chip) chip.classList.toggle('active', row.note === 'ปิด');
   renderGtaPrintPages();
 }
 
@@ -1584,7 +1599,10 @@ function renderGtaTable() {
           <input type="number" step="0.01" class="num" value="${r.orn_sell ?? ''}" onchange="onGtaRowChange(${idx}, 'orn_sell', this.value)" />
         </td>
         <td>
-          <input type="text" value="${esc(r.note || '')}" placeholder="" onchange="onGtaRowChange(${idx}, 'note', this.value)" />
+          <div class="gta-note-cell">
+            <input type="text" id="gta-note-${idx}" value="${esc(r.note || '')}" placeholder="" onchange="onGtaRowChange(${idx}, 'note', this.value)" />
+            <button type="button" id="gta-note-closed-${idx}" class="btn-note-chip ${r.note === 'ปิด' ? 'active' : ''}" onclick="toggleGtaClosedNote(${idx})" title="คลิกเพื่อใส่/ล้าง ปิด">ปิด</button>
+          </div>
         </td>
       </tr>
     `

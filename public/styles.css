@@ -1095,6 +1095,42 @@ input[type="date"].dmy-enhanced::-webkit-calendar-picker-indicator {
   text-align: center;
 }
 
+.gta-note-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.gta-note-cell input {
+  flex: 1;
+  min-width: 0;
+}
+
+.btn-note-chip {
+  flex-shrink: 0;
+  padding: 2px 7px;
+  font-size: 11.5px;
+  font-family: inherit;
+  font-weight: 600;
+  border-radius: 999px;
+  border: 1px solid #d5ccb9;
+  background: #f8f5ef;
+  color: #5c5346;
+  cursor: pointer;
+  line-height: 1.4;
+}
+
+.btn-note-chip:hover {
+  border-color: #b58d3d;
+  color: #1f1a14;
+}
+
+.btn-note-chip.active {
+  background: #fde8e8;
+  border-color: #d9534f;
+  color: #a61b1b;
+}
+
 .vat-table tfoot td {
   font-weight: 700;
   background: #f8f6f0;
