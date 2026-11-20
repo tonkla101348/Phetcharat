@@ -1494,6 +1494,17 @@ async function loadGtaView(forceRefresh = false) {
     if (forceRefresh && samePeriod && state.gtaRows.length === (d.rows || []).length) {
       const byDay = new Map((d.rows || []).map((r) => [r.day_no, r]));
       state.gtaRows = state.gtaRows.map((cur) => {
+        if (String(cur.note || '').trim() === 'ปิด') {
+          return {
+            ...cur,
+            gold_percent: '',
+            bar_buy: null,
+            bar_sell: null,
+            orn_buy: null,
+            orn_sell: null,
+            note: 'ปิด',
+          };
+        }
         const srv = byDay.get(cur.day_no);
         if (!srv) return cur;
         return {
@@ -1542,15 +1553,64 @@ async function refreshGtaPrices() {
   }
 }
 
+function applyGtaClosedState(row, isClosed) {
+  if (!row) return;
+  if (isClosed) {
+    const hasAny =
+      Boolean(row.gold_percent) ||
+      row.bar_buy !== null ||
+      row.bar_sell !== null ||
+      row.orn_buy !== null ||
+      row.orn_sell !== null;
+    if (hasAny && !row._prevBeforeClose) {
+      row._prevBeforeClose = {
+        gold_percent: row.gold_percent || '',
+        bar_buy: row.bar_buy ?? null,
+        bar_sell: row.bar_sell ?? null,
+        orn_buy: row.orn_buy ?? null,
+        orn_sell: row.orn_sell ?? null,
+      };
+    }
+    row.note = 'ปิด';
+    row.gold_percent = '';
+    row.bar_buy = null;
+    row.bar_sell = null;
+    row.orn_buy = null;
+    row.orn_sell = null;
+  } else {
+    row.note = '';
+    if (row._prevBeforeClose) {
+      row.gold_percent = row._prevBeforeClose.gold_percent;
+      row.bar_buy = row._prevBeforeClose.bar_buy;
+      row.bar_sell = row._prevBeforeClose.bar_sell;
+      row.orn_buy = row._prevBeforeClose.orn_buy;
+      row.orn_sell = row._prevBeforeClose.orn_sell;
+      delete row._prevBeforeClose;
+    }
+  }
+}
+
 function onGtaRowChange(idx, field, val) {
   const row = state.gtaRows[idx];
   if (!row) return;
-  if (field === 'gold_percent' || field === 'note') {
-    row[field] = String(val || '').trim();
-    if (field === 'note') {
-      const chip = document.getElementById(`gta-note-closed-${idx}`);
-      if (chip) chip.classList.toggle('active', row.note === 'ปิด');
+  if (field === 'note') {
+    const trimmed = String(val || '').trim();
+    if (trimmed === 'ปิด') {
+      applyGtaClosedState(row, true);
+      renderGtaTable();
+      return;
     }
+    if (row.note === 'ปิด') {
+      applyGtaClosedState(row, false);
+      row.note = trimmed;
+      renderGtaTable();
+      return;
+    }
+    row.note = trimmed;
+    const chip = document.getElementById(`gta-note-closed-${idx}`);
+    if (chip) chip.classList.toggle('active', row.note === 'ปิด');
+  } else if (field === 'gold_percent') {
+    row.gold_percent = String(val || '').trim();
   } else {
     const raw = String(val ?? '').trim();
     row[field] = raw === '' ? null : round2Client(Number(raw) || 0);
@@ -1561,12 +1621,8 @@ function onGtaRowChange(idx, field, val) {
 function toggleGtaClosedNote(idx) {
   const row = state.gtaRows[idx];
   if (!row) return;
-  row.note = row.note === 'ปิด' ? '' : 'ปิด';
-  const input = document.getElementById(`gta-note-${idx}`);
-  const chip = document.getElementById(`gta-note-closed-${idx}`);
-  if (input) input.value = row.note;
-  if (chip) chip.classList.toggle('active', row.note === 'ปิด');
-  renderGtaPrintPages();
+  applyGtaClosedState(row, row.note !== 'ปิด');
+  renderGtaTable();
 }
 
 function fmtGtaPriceCell(val) {
@@ -1620,19 +1676,21 @@ function renderGtaPrintPages() {
   const yearFull = document.getElementById('gta-print-year')?.textContent || '';
 
   const rowsHtml = state.gtaRows
-    .map(
-      (r) => `
+    .map((r) => {
+      const noteText = String(r.note || '').trim();
+      const isClosed = noteText === 'ปิด';
+      return `
       <tr>
         <td class="center">${r.day_no}</td>
-        <td class="center">${esc(r.gold_percent || '')}</td>
-        <td class="num">${esc(fmtGtaPriceCell(r.bar_buy))}</td>
-        <td class="num">${esc(fmtGtaPriceCell(r.bar_sell))}</td>
-        <td class="num">${esc(fmtGtaPriceCell(r.orn_buy))}</td>
-        <td class="num">${esc(fmtGtaPriceCell(r.orn_sell))}</td>
-        <td>${esc(r.note || '')}</td>
+        <td class="center">${isClosed ? '' : esc(r.gold_percent || '')}</td>
+        <td class="num">${isClosed ? '' : esc(fmtGtaPriceCell(r.bar_buy))}</td>
+        <td class="num">${isClosed ? '' : esc(fmtGtaPriceCell(r.bar_sell))}</td>
+        <td class="num">${isClosed ? '' : esc(fmtGtaPriceCell(r.orn_buy))}</td>
+        <td class="num">${isClosed ? '' : esc(fmtGtaPriceCell(r.orn_sell))}</td>
+        <td>${esc(noteText)}</td>
       </tr>
-    `
-    )
+    `;
+    })
     .join('');
 
   container.innerHTML = `

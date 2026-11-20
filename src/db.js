@@ -1780,6 +1780,8 @@ function getGtaPriceReport(yearBe, monthNum, fetchedPricesMap = {}, overwritePri
   for (let dayNo = 1; dayNo <= daysInMonth; dayNo++) {
     const dateIso = `${ymKey}-${String(dayNo).padStart(2, '0')}`;
     const saved = savedMap.get(dayNo);
+    const savedNote = saved ? String(saved.note || '').trim() : '';
+    const isClosed = savedNote === 'ปิด';
     const fetched = fetchedPricesMap ? fetchedPricesMap[dateIso] : null;
     const savedHasAnyPrice = Boolean(
       saved &&
@@ -1793,27 +1795,29 @@ function getGtaPriceReport(yearBe, monthNum, fetchedPricesMap = {}, overwritePri
     let barSell = null;
     let ornBuy = null;
     let ornSell = null;
-    if (fetched && (overwritePrices || !savedHasAnyPrice)) {
-      barBuy = Number(fetched.bar_buy) > 0 ? Number(fetched.bar_buy) : null;
-      barSell = Number(fetched.bar_sell) > 0 ? Number(fetched.bar_sell) : null;
-      ornBuy = Number(fetched.orn_tax_base) > 0 ? Number(fetched.orn_tax_base) : null;
-      ornSell = Number(fetched.orn_sell) > 0 ? Number(fetched.orn_sell) : null;
-    } else if (saved) {
-      barBuy = saved.bar_buy !== null && saved.bar_buy !== undefined && Number(saved.bar_buy) > 0 ? Number(saved.bar_buy) : null;
-      barSell = saved.bar_sell !== null && saved.bar_sell !== undefined && Number(saved.bar_sell) > 0 ? Number(saved.bar_sell) : null;
-      ornBuy = saved.orn_buy !== null && saved.orn_buy !== undefined && Number(saved.orn_buy) > 0 ? Number(saved.orn_buy) : null;
-      ornSell = saved.orn_sell !== null && saved.orn_sell !== undefined && Number(saved.orn_sell) > 0 ? Number(saved.orn_sell) : null;
+    if (!isClosed) {
+      if (fetched && (overwritePrices || !savedHasAnyPrice)) {
+        barBuy = Number(fetched.bar_buy) > 0 ? Number(fetched.bar_buy) : null;
+        barSell = Number(fetched.bar_sell) > 0 ? Number(fetched.bar_sell) : null;
+        ornBuy = Number(fetched.orn_tax_base) > 0 ? Number(fetched.orn_tax_base) : null;
+        ornSell = Number(fetched.orn_sell) > 0 ? Number(fetched.orn_sell) : null;
+      } else if (saved) {
+        barBuy = saved.bar_buy !== null && saved.bar_buy !== undefined && Number(saved.bar_buy) > 0 ? Number(saved.bar_buy) : null;
+        barSell = saved.bar_sell !== null && saved.bar_sell !== undefined && Number(saved.bar_sell) > 0 ? Number(saved.bar_sell) : null;
+        ornBuy = saved.orn_buy !== null && saved.orn_buy !== undefined && Number(saved.orn_buy) > 0 ? Number(saved.orn_buy) : null;
+        ornSell = saved.orn_sell !== null && saved.orn_sell !== undefined && Number(saved.orn_sell) > 0 ? Number(saved.orn_sell) : null;
+      }
     }
 
     rows.push({
       day_no: dayNo,
       date_iso: dateIso,
-      gold_percent: saved ? String(saved.gold_percent || '') : '',
+      gold_percent: isClosed ? '' : saved ? String(saved.gold_percent || '') : '',
       bar_buy: barBuy,
       bar_sell: barSell,
       orn_buy: ornBuy,
       orn_sell: ornSell,
-      note: saved ? String(saved.note || '') : '',
+      note: savedNote,
     });
   }
 
@@ -1863,16 +1867,18 @@ function saveGtaPriceReport(yearBe, monthNum, rowsInput) {
       const dayNo = Number(r.day_no);
       if (!Number.isInteger(dayNo) || dayNo < 1 || dayNo > daysInMonth) continue;
       const dateIso = `${ymKey}-${String(dayNo).padStart(2, '0')}`;
+      const noteStr = String(r.note || '').trim();
+      const isClosed = noteStr === 'ปิด';
       ins.run(
         ymKey,
         dayNo,
         dateIso,
-        String(r.gold_percent || '').trim(),
-        parsePriceOrNull(r.bar_buy),
-        parsePriceOrNull(r.bar_sell),
-        parsePriceOrNull(r.orn_buy),
-        parsePriceOrNull(r.orn_sell),
-        String(r.note || '').trim(),
+        isClosed ? '' : String(r.gold_percent || '').trim(),
+        isClosed ? null : parsePriceOrNull(r.bar_buy),
+        isClosed ? null : parsePriceOrNull(r.bar_sell),
+        isClosed ? null : parsePriceOrNull(r.orn_buy),
+        isClosed ? null : parsePriceOrNull(r.orn_sell),
+        noteStr,
         nowIso
       );
     }
