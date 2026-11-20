@@ -57,26 +57,30 @@ function formatMonthKeyFull(monthKey, fallbackYear) {
 
 const DEFAULT_PAGE_TITLE = 'ห้างทองเพชรรัตน์ — ระบบจัดการจำนำทอง บัญชี และสต๊อกทอง';
 
+function resolvePrintShortMonth(explicitShort, monthNum, domId) {
+  if (explicitShort) return explicitShort;
+  if (monthNum >= 1 && monthNum <= 12) return THAI_MONTHS[monthNum - 1] || '';
+  const mFullText = String(document.getElementById(domId)?.textContent || '').trim();
+  const idx = THAI_MONTHS_FULL.indexOf(mFullText);
+  return idx >= 0 ? THAI_MONTHS[idx] : '';
+}
+
 function getActivePrintDocumentTitle() {
   if (state.activeTab === 'vat') {
-    let mShort = state.vatCache?.monthShort || '';
-    if (!mShort) {
-      const mFullText = String(document.getElementById('vat-print-month')?.textContent || '').trim();
-      const idx = THAI_MONTHS_FULL.indexOf(mFullText);
-      if (idx >= 0) mShort = THAI_MONTHS[idx];
-    }
-    return mShort ? `รายงานภาษีขาย ${mShort}` : 'รายงานภาษีขาย';
+    const mShort = resolvePrintShortMonth(state.vatCache?.monthShort, 0, 'vat-print-month');
+    const yShort =
+      state.vatCache?.yearShort ||
+      String(document.getElementById('vat-print-year')?.textContent || state.vatActiveYear || '')
+        .trim()
+        .slice(-2);
+    return ['รายงานภาษีขาย', mShort, yShort].filter(Boolean).join(' ');
   }
   if (state.activeTab === 'gta') {
-    let mShort = THAI_MONTHS[(Number(state.gtaMonthNum) || 0) - 1] || '';
-    if (!mShort) {
-      const mFullText = String(document.getElementById('gta-print-month')?.textContent || '').trim();
-      const idx = THAI_MONTHS_FULL.indexOf(mFullText);
-      if (idx >= 0) mShort = THAI_MONTHS[idx];
-    }
-    return mShort
-      ? `ตารางการซื้อ-ขายทองรูปพรรณตามประกาศของสมาคมค้าทองคำ ${mShort}`
-      : 'ตารางการซื้อ-ขายทองรูปพรรณตามประกาศของสมาคมค้าทองคำ';
+    const mShort = resolvePrintShortMonth('', Number(state.gtaMonthNum) || 0, 'gta-print-month');
+    const yShort = String(state.gtaYearBe || document.getElementById('gta-print-year')?.textContent || '')
+      .trim()
+      .slice(-2);
+    return ['ตารางการซื้อ-ขายทองรูปพรรณตามประกาศของสมาคมค้าทองคำ', mShort, yShort].filter(Boolean).join(' ');
   }
   return DEFAULT_PAGE_TITLE;
 }
