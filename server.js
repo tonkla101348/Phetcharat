@@ -206,6 +206,21 @@ async function handleApi(req, res, parsedUrl) {
     return sendJson(res, 200, { ok: true, data: saved });
   }
 
+  if (method === 'GET' && pathname === '/api/sso-payroll') {
+    const year = parsedUrl.searchParams.get('year') || '';
+    const monthNum = parsedUrl.searchParams.get('month_num') || '';
+    return sendJson(res, 200, {
+      ok: true,
+      data: dbMod.getSsoPayrollReport(year ? Number(year) : 0, monthNum ? Number(monthNum) : 0),
+    });
+  }
+
+  if (method === 'POST' && pathname === '/api/sso-payroll') {
+    const body = await parseJsonBody(req);
+    const saved = dbMod.saveSsoPayrollReport(body.year_be, body.month_num, body.rows || []);
+    return sendJson(res, 200, { ok: true, data: saved });
+  }
+
   if (method === 'POST' && pathname === '/api/account/entry') {
     const body = await parseJsonBody(req);
     const entry = dbMod.addAccountEntry(body);

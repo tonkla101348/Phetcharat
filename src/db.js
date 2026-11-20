@@ -307,6 +307,27 @@ function initSchema() {
       UNIQUE(ym_key, day_no)
     );
     CREATE INDEX IF NOT EXISTS idx_gta_price_ym ON gta_price_rows(ym_key, day_no);
+
+    CREATE TABLE IF NOT EXISTS sso_payroll_rows (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ym_key TEXT NOT NULL,
+      row_order INTEGER NOT NULL DEFAULT 1,
+      employee_name TEXT DEFAULT '',
+      salary REAL,
+      daily_rate REAL,
+      work_days REAL,
+      daily_total REAL,
+      overtime REAL,
+      bonus REAL,
+      total_income REAL,
+      tax REAL,
+      sso REAL,
+      other_deduct REAL,
+      net_pay REAL,
+      signature_text TEXT DEFAULT '',
+      updated_at TEXT DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_sso_payroll_ym ON sso_payroll_rows(ym_key, row_order, id);
   `);
 
   const defaults = {
@@ -1891,6 +1912,157 @@ function saveGtaPriceReport(yearBe, monthNum, rowsInput) {
   return getGtaPriceReport(targetYearBe, targetMonthNum, {}, false);
 }
 
+function createBlankSsoRow(rowOrder) {
+  return {
+    row_order: rowOrder,
+    employee_name: '',
+    salary: null,
+    daily_rate: null,
+    work_days: null,
+    daily_total: null,
+    overtime: null,
+    bonus: null,
+    total_income: null,
+    tax: null,
+    sso: null,
+    other_deduct: null,
+    net_pay: null,
+    signature_text: '',
+  };
+}
+
+function computeSsoNetPay(r) {
+  const hasAny =
+    (r.total_income !== null && r.total_income !== undefined && r.total_income !== '') ||
+    (r.tax !== null && r.tax !== undefined && r.tax !== '') ||
+    (r.sso !== null && r.sso !== undefined && r.sso !== '') ||
+    (r.other_deduct !== null && r.other_deduct !== undefined && r.other_deduct !== '');
+  if (!hasAny) return null;
+  const inc = Number(r.total_income) || 0;
+  const ded = (Number(r.tax) || 0) + (Number(r.sso) || 0) + (Number(r.other_deduct) || 0);
+  return round2(inc - ded);
+}
+
+function getSsoPayrollReport(yearBe, monthNum) {
+  initSchema();
+  const todayIso = getTodayIsoBangkok();
+  const [nowYearCe, nowMonth] = todayIso.split('-').map(Number);
+
+  let targetYearBe = Number(yearBe) || 0;
+  let targetMonthNum = Number(monthNum) || 0;
+  if (!targetYearBe || targetYearBe < 2400) targetYearBe = nowYearCe + 543;
+  if (!targetMonthNum || targetMonthNum < 1 || targetMonthNum > 12) targetMonthNum = nowMonth;
+
+  const yearCe = targetYearBe - 543;
+  const ymKey = `${yearCe}-${String(targetMonthNum).padStart(2, '0')}`;
+  const monthFull = THAI_MONTHS_FULL[targetMonthNum - 1] || '';
+  const monthShort = THAI_MONTHS_SHORT[targetMonthNum - 1] || '';
+  const yearFull = String(targetYearBe);
+  const yearShort = yearFull.slice(-2);
+
+  const savedRows = db
+    .prepare('SELECT * FROM sso_payroll_rows WHERE ym_key = ? ORDER BY row_order ASC, id ASC')
+    .all(ymKey);
+
+  const rows =
+    savedRows.length > 0
+      ? savedRows.map((r, i) => ({
+          row_order: i + 1,
+          employee_name: String(r.employee_name || ''),
+          salary: r.salary ?? null,
+          daily_rate: r.daily_rate ?? null,
+          work_days: r.work_days ?? null,
+          daily_total: r.daily_total ?? null,
+          overtime: r.overtime ?? null,
+          bonus: r.bonus ?? null,
+          total_income: r.total_income ?? null,
+          tax: r.tax ?? null,
+          sso: r.sso ?? null,
+          other_deduct: r.other_deduct ?? null,
+          net_pay: r.net_pay ?? null,
+          signature_text: String(r.signature_text || ''),
+        }))
+      : [1, 2, 3, 4].map((n) => createBlankSsoRow(n));
+
+  return {
+    yearBe: targetYearBe,
+    yearCe,
+    monthNum: targetMonthNum,
+    monthFull,
+    monthShort,
+    yearFull,
+    yearShort,
+    ymKey,
+    rows,
+  };
+}
+
+function saveSsoPayrollReport(yearBe, monthNum, rowsInput) {
+  initSchema();
+  const todayIso = getTodayIsoBangkok();
+  const [nowYearCe, nowMonth] = todayIso.split('-').map(Number);
+
+  let targetYearBe = Number(yearBe) || 0;
+  let targetMonthNum = Number(monthNum) || 0;
+  if (!targetYearBe || targetYearBe < 2400) targetYearBe = nowYearCe + 543;
+  if (!targetMonthNum || targetMonthNum < 1 || targetMonthNum > 12) targetMonthNum = nowMonth;
+
+  const yearCe = targetYearBe - 543;
+  const ymKey = `${yearCe}-${String(targetMonthNum).padStart(2, '0')}`;
+  const list = Array.isArray(rowsInput) ? rowsInput : [];
+  const nowIso = new Date().toISOString();
+
+  const parseNumOrNull = (val) => {
+    if (val === '' || val === null || val === undefined) return null;
+    const n = round2(Number(val));
+    return Number.isFinite(n) ? n : null;
+  };
+
+  db.exec('BEGIN');
+  try {
+    db.prepare('DELETE FROM sso_payroll_rows WHERE ym_key = ?').run(ymKey);
+    const ins = db.prepare(`
+      INSERT INTO sso_payroll_rows (
+        ym_key, row_order, employee_name, salary, daily_rate, work_days, daily_total,
+        overtime, bonus, total_income, tax, sso, other_deduct, net_pay, signature_text, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    list.forEach((raw, idx) => {
+      const normalized = {
+        total_income: parseNumOrNull(raw.total_income),
+        tax: parseNumOrNull(raw.tax),
+        sso: parseNumOrNull(raw.sso),
+        other_deduct: parseNumOrNull(raw.other_deduct),
+      };
+      const netPay = computeSsoNetPay(normalized);
+      ins.run(
+        ymKey,
+        idx + 1,
+        String(raw.employee_name || '').trim(),
+        parseNumOrNull(raw.salary),
+        parseNumOrNull(raw.daily_rate),
+        parseNumOrNull(raw.work_days),
+        parseNumOrNull(raw.daily_total),
+        parseNumOrNull(raw.overtime),
+        parseNumOrNull(raw.bonus),
+        normalized.total_income,
+        normalized.tax,
+        normalized.sso,
+        normalized.other_deduct,
+        netPay,
+        String(raw.signature_text || '').trim(),
+        nowIso
+      );
+    });
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+
+  return getSsoPayrollReport(targetYearBe, targetMonthNum);
+}
+
 function addAccountEntry(input) {
   return insertAccountEntryInternal(input);
 }
@@ -2292,6 +2464,8 @@ module.exports = {
   getGoldDailyPricesForMonth,
   getGtaPriceReport,
   saveGtaPriceReport,
+  getSsoPayrollReport,
+  saveSsoPayrollReport,
   getMonthOrderForKey,
   getBeYearForMonthOrder,
   addAccountEntry,

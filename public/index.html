@@ -43,6 +43,7 @@
       <button class="nav-btn" data-tab="account" onclick="switchTab('account')">บัญชีรายรับ-รายจ่าย</button>
       <button class="nav-btn" data-tab="vat" onclick="switchTab('vat')">รายงานภาษีขาย</button>
       <button class="nav-btn" data-tab="gta" onclick="switchTab('gta')">ตารางราคาสมาคมฯ</button>
+      <button class="nav-btn" data-tab="sso" onclick="switchTab('sso')">ประกันสังคม</button>
       <button class="nav-btn" data-tab="stock" onclick="switchTab('stock')">สต๊อกทอง (Stock)</button>
       <button class="nav-btn" data-tab="sync" onclick="switchTab('sync')">เชื่อมต่อ Google Sheets</button>
     </nav>
@@ -357,6 +358,83 @@
           </table>
         </div>
         <div id="gta-print-pages" class="vat-print-pages"></div>
+      </section>
+
+      <!-- ==================== TAB 4D: SSO PAYROLL REGISTER (ประกันสังคม) ==================== -->
+      <section id="tab-sso" class="tab-panel">
+        <div class="card no-print">
+          <div class="toolbar" style="justify-content:space-between;">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <strong>ประจำเดือน:</strong>
+              <select id="sso-month-select" class="select-input" onchange="selectSsoPeriod()"></select>
+              <strong>พ.ศ.:</strong>
+              <select id="sso-year-select" class="select-input" onchange="selectSsoPeriod()"></select>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <button type="button" class="btn btn-outline" onclick="addSsoRow()">+ เพิ่มแถว</button>
+              <button type="button" class="btn btn-primary" onclick="saveSsoReport()">บันทึกประกันสังคม</button>
+              <button type="button" class="btn btn-gold" onclick="printSsoReport()">สั่งพิมพ์ (A4 แนวนอน)</button>
+            </div>
+          </div>
+          <div style="padding:8px 16px;border-top:1px solid #f0ebe1;font-size:12.5px;">
+            <span class="muted">พิมพ์กรอกข้อมูลในตารางด้วยตนเอง • ช่อง "รวมรับสุทธิ" คำนวณอัตโนมัติ (= รวมรายรับ − รายการหัก) • แนวนอน (A4 Landscape)</span>
+          </div>
+        </div>
+
+        <div class="vat-paper-sheet sso-paper-sheet screen-only mt-12">
+          <div class="vat-doc-header">
+            <div class="vat-doc-title">บริษัท เพชรรัตน์ (บ้านกรวด) จำกัด</div>
+            <div class="vat-doc-period">
+              ทะเบียนจ่ายเงินเดือน ประจำเดือน <span class="vat-period-blank" id="sso-print-month">พฤศจิกายน</span>
+              พ.ศ. <span class="vat-period-blank" id="sso-print-year">2569</span>
+            </div>
+          </div>
+
+          <div class="sso-table-wrap">
+            <table class="vat-table sso-table">
+              <thead>
+                <tr>
+                  <th rowspan="3" style="width:4%;">ลำดับ<br />ที่</th>
+                  <th rowspan="3" style="width:15%;">ชื่อ-สกุลลูกจ้าง</th>
+                  <th colspan="7">รายรับ</th>
+                  <th colspan="3">รายการหัก</th>
+                  <th rowspan="3" style="width:7.5%;">รวมรับ<br />สุทธิ</th>
+                  <th rowspan="3" style="width:11.5%;">ลายมือชื่อ<br />ผู้รับเงิน</th>
+                  <th rowspan="3" class="no-print" style="width:46px;">ลบ</th>
+                </tr>
+                <tr>
+                  <th rowspan="2" style="width:7%;">เงินเดือน</th>
+                  <th colspan="3">ค่าจ้างรายวัน</th>
+                  <th rowspan="2" style="width:6%;">ล่วงเวลา</th>
+                  <th rowspan="2" style="width:6%;">โบนัส</th>
+                  <th rowspan="2" style="width:7.5%;">รวมรายรับ</th>
+                  <th rowspan="2" style="width:5.5%;">ภาษี</th>
+                  <th rowspan="2" style="width:6.5%;">ประกัน<br />สังคม</th>
+                  <th rowspan="2" style="width:5.5%;">อื่นๆ</th>
+                </tr>
+                <tr>
+                  <th style="width:5.5%;">วันละ</th>
+                  <th style="width:6%;">จำนวน<br />วันทำงาน</th>
+                  <th style="width:6.5%;">จำนวนเงิน</th>
+                </tr>
+              </thead>
+              <tbody id="sso-tbody"></tbody>
+              <tfoot id="sso-tfoot"></tfoot>
+            </table>
+          </div>
+
+          <div class="sso-signatures">
+            <div class="sso-sig-col">
+              <div class="sso-sig-line">ลงชื่อ......................................................(นายจ้าง)</div>
+              <div>(......................................................)</div>
+            </div>
+            <div class="sso-sig-col">
+              <div class="sso-sig-line">ลงชื่อ......................................................(ผู้จ่ายเงิน)</div>
+              <div>(......................................................)</div>
+            </div>
+          </div>
+        </div>
+        <div id="sso-print-pages" class="vat-print-pages"></div>
       </section>
 
       <!-- ==================== TAB 5: GOLD STOCK (Stock ทอง) ==================== -->

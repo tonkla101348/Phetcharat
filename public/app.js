@@ -16,6 +16,9 @@ const state = {
   gtaYearBe: 0,
   gtaMonthNum: 0,
   gtaRows: [],
+  ssoYearBe: 0,
+  ssoMonthNum: 0,
+  ssoRows: [],
   stockCache: null,
   syncCache: null,
 };
@@ -65,6 +68,17 @@ function resolvePrintShortMonth(explicitShort, monthNum, domId) {
   return idx >= 0 ? THAI_MONTHS[idx] : '';
 }
 
+function setPrintPageOrientation(orientation) {
+  const mode = orientation === 'landscape' ? 'landscape' : 'portrait';
+  let st = document.getElementById('dynamic-print-page');
+  if (!st) {
+    st = document.createElement('style');
+    st.id = 'dynamic-print-page';
+    document.head.appendChild(st);
+  }
+  st.textContent = `@media print { @page { size: A4 ${mode}; margin: 0; } }`;
+}
+
 function getActivePrintDocumentTitle() {
   if (state.activeTab === 'vat') {
     const mShort = resolvePrintShortMonth(state.vatCache?.monthShort, 0, 'vat-print-month');
@@ -82,12 +96,21 @@ function getActivePrintDocumentTitle() {
       .slice(-2);
     return ['ตารางการซื้อ-ขายทองรูปพรรณตามประกาศของสมาคมค้าทองคำ', mShort, yShort].filter(Boolean).join(' ');
   }
+  if (state.activeTab === 'sso') {
+    const mShort = resolvePrintShortMonth('', Number(state.ssoMonthNum) || 0, 'sso-print-month');
+    const yShort = String(state.ssoYearBe || document.getElementById('sso-print-year')?.textContent || '')
+      .trim()
+      .slice(-2);
+    return ['ประกันสังคม', mShort, yShort].filter(Boolean).join(' ');
+  }
   return DEFAULT_PAGE_TITLE;
 }
 
 window.addEventListener('beforeprint', () => {
   if (state.activeTab === 'vat') renderVatPrintPages();
   else if (state.activeTab === 'gta') renderGtaPrintPages();
+  else if (state.activeTab === 'sso') renderSsoPrintPages();
+  setPrintPageOrientation(state.activeTab === 'sso' ? 'landscape' : 'portrait');
   document.title = getActivePrintDocumentTitle();
 });
 
@@ -212,6 +235,7 @@ function debounce(fn, ms = 220) {
 function switchTab(tabName) {
   state.activeTab = tabName;
   document.title = DEFAULT_PAGE_TITLE;
+  setPrintPageOrientation(tabName === 'sso' ? 'landscape' : 'portrait');
   document.querySelectorAll('.nav-btn').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.tab === tabName);
   });
@@ -224,6 +248,7 @@ function switchTab(tabName) {
   else if (tabName === 'account') loadAccountView();
   else if (tabName === 'vat') loadVatView();
   else if (tabName === 'gta') loadGtaView();
+  else if (tabName === 'sso') loadSsoView();
   else if (tabName === 'stock') loadStockView();
   else if (tabName === 'sync') loadSyncView();
 }
@@ -1492,15 +1517,14 @@ async function saveVatReport() {
   }
 }
 
-/* ==================== GTA GOLD ASSOCIATION PRICE TABLE ==================== */
-function initGtaSelectors(activeYearBe, activeMonthNum) {
-  const mSel = document.getElementById('gta-month-select');
+function populateBeYearMonthSelectors(monthSelectId, yearSelectId, activeYearBe, activeMonthNum) {
+  const mSel = document.getElementById(monthSelectId);
   if (mSel) {
     mSel.innerHTML = THAI_MONTHS_FULL.map(
       (name, i) => `<option value="${i + 1}" ${i + 1 === activeMonthNum ? 'selected' : ''}>${esc(name)}</option>`
     ).join('');
   }
-  const yrSel = document.getElementById('gta-year-select');
+  const yrSel = document.getElementById(yearSelectId);
   if (yrSel) {
     const currentBe = Number(getTodayIso().slice(0, 4)) + 543;
     const maxBe = Math.max(activeYearBe, currentBe) + 1;
@@ -1510,6 +1534,11 @@ function initGtaSelectors(activeYearBe, activeMonthNum) {
       .map((y) => `<option value="${y}" ${y === activeYearBe ? 'selected' : ''}>พ.ศ. ${y}</option>`)
       .join('');
   }
+}
+
+/* ==================== GTA GOLD ASSOCIATION PRICE TABLE ==================== */
+function initGtaSelectors(activeYearBe, activeMonthNum) {
+  populateBeYearMonthSelectors('gta-month-select', 'gta-year-select', activeYearBe, activeMonthNum);
 }
 
 function selectGtaPeriod() {
@@ -1794,6 +1823,300 @@ async function saveGtaReport() {
 
 function printGtaReport() {
   renderGtaPrintPages();
+  document.title = getActivePrintDocumentTitle();
+  window.print();
+}
+
+/* ==================== SSO PAYROLL REGISTER (ประกันสังคม) ==================== */
+const SSO_NUMERIC_FIELDS = [
+  'salary',
+  'daily_rate',
+  'work_days',
+  'daily_total',
+  'overtime',
+  'bonus',
+  'total_income',
+  'tax',
+  'sso',
+  'other_deduct',
+  'net_pay',
+];
+
+const SSO_EDITABLE_NUM_FIELDS = SSO_NUMERIC_FIELDS.filter((f) => f !== 'net_pay');
+
+function initSsoSelectors(activeYearBe, activeMonthNum) {
+  populateBeYearMonthSelectors('sso-month-select', 'sso-year-select', activeYearBe, activeMonthNum);
+}
+
+function selectSsoPeriod() {
+  const yrSel = document.getElementById('sso-year-select');
+  const mSel = document.getElementById('sso-month-select');
+  if (yrSel && yrSel.value) state.ssoYearBe = Number(yrSel.value);
+  if (mSel && mSel.value) state.ssoMonthNum = Number(mSel.value);
+  loadSsoView();
+}
+
+async function loadSsoView() {
+  try {
+    const params = new URLSearchParams();
+    if (state.ssoYearBe) params.set('year', String(state.ssoYearBe));
+    if (state.ssoMonthNum) params.set('month_num', String(state.ssoMonthNum));
+    const qs = params.toString();
+    const d = await api(`/api/sso-payroll${qs ? '?' + qs : ''}`);
+
+    state.ssoYearBe = Number(d.yearBe);
+    state.ssoMonthNum = Number(d.monthNum);
+    state.ssoRows = (d.rows || []).map((r) => ({ ...r }));
+
+    initSsoSelectors(state.ssoYearBe, state.ssoMonthNum);
+    const mEl = document.getElementById('sso-print-month');
+    const yEl = document.getElementById('sso-print-year');
+    if (mEl) mEl.textContent = d.monthFull || '';
+    if (yEl) yEl.textContent = d.yearFull || '';
+
+    renderSsoTable();
+  } catch (err) {
+    toast('โหลดทะเบียนจ่ายเงินเดือนไม่สำเร็จ: ' + err.message, 'error');
+  }
+}
+
+function computeSsoNetPayClient(r) {
+  const hasAny =
+    (r.total_income !== null && r.total_income !== undefined && r.total_income !== '') ||
+    (r.tax !== null && r.tax !== undefined && r.tax !== '') ||
+    (r.sso !== null && r.sso !== undefined && r.sso !== '') ||
+    (r.other_deduct !== null && r.other_deduct !== undefined && r.other_deduct !== '');
+  if (!hasAny) return null;
+  const inc = Number(r.total_income) || 0;
+  const ded = (Number(r.tax) || 0) + (Number(r.sso) || 0) + (Number(r.other_deduct) || 0);
+  return round2Client(inc - ded);
+}
+
+function fmtSsoNum(val) {
+  if (val === null || val === undefined || val === '') return '';
+  const num = Number(val);
+  if (!Number.isFinite(num) || num === 0) return '';
+  return Number.isInteger(num)
+    ? num.toLocaleString('th-TH', { maximumFractionDigits: 0 })
+    : num.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function fmtSsoNetDisplay(val) {
+  if (val === null || val === undefined || val === '') return '';
+  const num = Number(val);
+  if (!Number.isFinite(num)) return '';
+  if (num === 0) return '0';
+  return fmtSsoNum(num);
+}
+
+function computeSsoTotalsClient() {
+  const totals = {};
+  for (const field of SSO_NUMERIC_FIELDS) {
+    totals[field] = 0;
+    for (const r of state.ssoRows) {
+      totals[field] = round2Client(totals[field] + (Number(r[field]) || 0));
+    }
+  }
+  return totals;
+}
+
+function buildSsoTotalCellsHtml(totals, includeDeleteCol) {
+  const sumTds = SSO_NUMERIC_FIELDS.map((f) => `<td class="num"><strong>${esc(fmtSsoNum(totals[f]))}</strong></td>`).join('');
+  return `
+    <tr class="vat-total-row">
+      <td colspan="2" class="center"><strong>รวม</strong></td>
+      ${sumTds}
+      <td></td>
+      ${includeDeleteCol ? '<td class="no-print"></td>' : ''}
+    </tr>
+  `;
+}
+
+function onSsoRowChange(idx, field, val) {
+  const row = state.ssoRows[idx];
+  if (!row) return;
+  if (field === 'employee_name' || field === 'signature_text') {
+    row[field] = String(val || '').trim();
+  } else {
+    const raw = String(val ?? '').trim();
+    row[field] = raw === '' ? null : round2Client(Number(raw) || 0);
+  }
+  row.net_pay = computeSsoNetPayClient(row);
+  const netCell = document.getElementById(`sso-net-${idx}`);
+  if (netCell) netCell.textContent = fmtSsoNetDisplay(row.net_pay);
+  renderSsoFooter();
+  renderSsoPrintPages();
+}
+
+function addSsoRow() {
+  state.ssoRows.push({
+    row_order: state.ssoRows.length + 1,
+    employee_name: '',
+    salary: null,
+    daily_rate: null,
+    work_days: null,
+    daily_total: null,
+    overtime: null,
+    bonus: null,
+    total_income: null,
+    tax: null,
+    sso: null,
+    other_deduct: null,
+    net_pay: null,
+    signature_text: '',
+  });
+  renderSsoTable();
+}
+
+function removeSsoRow(idx) {
+  state.ssoRows.splice(idx, 1);
+  renderSsoTable();
+}
+
+function renderSsoFooter() {
+  const tfoot = document.getElementById('sso-tfoot');
+  if (!tfoot) return;
+  tfoot.innerHTML = buildSsoTotalCellsHtml(computeSsoTotalsClient(), true);
+}
+
+function renderSsoTable() {
+  const tbody = document.getElementById('sso-tbody');
+  if (!tbody) return;
+
+  tbody.innerHTML = state.ssoRows
+    .map((r, idx) => {
+      const editableNumCells = SSO_EDITABLE_NUM_FIELDS.map(
+        (field) => `
+          <td class="num">
+            <input type="number" step="0.01" class="num" value="${r[field] ?? ''}" onchange="onSsoRowChange(${idx}, '${field}', this.value)" />
+          </td>
+        `
+      ).join('');
+      return `
+        <tr>
+          <td class="center"><strong>${idx + 1}</strong></td>
+          <td>
+            <input type="text" value="${esc(r.employee_name || '')}" onchange="onSsoRowChange(${idx}, 'employee_name', this.value)" />
+          </td>
+          ${editableNumCells}
+          <td class="num" id="sso-net-${idx}"><strong>${esc(fmtSsoNetDisplay(r.net_pay))}</strong></td>
+          <td>
+            <input type="text" value="${esc(r.signature_text || '')}" onchange="onSsoRowChange(${idx}, 'signature_text', this.value)" />
+          </td>
+          <td class="center no-print">
+            <button type="button" class="btn btn-sm btn-danger-outline" onclick="removeSsoRow(${idx})">ลบ</button>
+          </td>
+        </tr>
+      `;
+    })
+    .join('');
+
+  renderSsoFooter();
+  renderSsoPrintPages();
+}
+
+function renderSsoPrintPages() {
+  const container = document.getElementById('sso-print-pages');
+  if (!container) return;
+
+  const monthFull = document.getElementById('sso-print-month')?.textContent || '';
+  const yearFull = document.getElementById('sso-print-year')?.textContent || '';
+  const totals = computeSsoTotalsClient();
+
+  const rowsHtml = state.ssoRows
+    .map((r, idx) => {
+      const editableNumCells = SSO_EDITABLE_NUM_FIELDS.map(
+        (field) => `<td class="num">${esc(fmtSsoNum(r[field]))}</td>`
+      ).join('');
+      return `
+        <tr>
+          <td class="center">${idx + 1}</td>
+          <td>${esc(r.employee_name || '')}</td>
+          ${editableNumCells}
+          <td class="num">${esc(fmtSsoNetDisplay(r.net_pay))}</td>
+          <td>${esc(r.signature_text || '')}</td>
+        </tr>
+      `;
+    })
+    .join('');
+
+  const totalRowHtml = buildSsoTotalCellsHtml(totals, false);
+
+  container.innerHTML = `
+    <div class="sso-print-page">
+      <div class="vat-doc-header">
+        <div class="vat-doc-title">บริษัท เพชรรัตน์ (บ้านกรวด) จำกัด</div>
+        <div class="vat-doc-period">
+          ทะเบียนจ่ายเงินเดือน ประจำเดือน <span class="vat-period-blank">${esc(monthFull)}</span>
+          พ.ศ. <span class="vat-period-blank">${esc(yearFull)}</span>
+        </div>
+      </div>
+
+      <table class="vat-table sso-table">
+        <thead>
+          <tr>
+            <th rowspan="3" style="width:4%;">ลำดับ<br />ที่</th>
+            <th rowspan="3" style="width:15%;">ชื่อ-สกุลลูกจ้าง</th>
+            <th colspan="7">รายรับ</th>
+            <th colspan="3">รายการหัก</th>
+            <th rowspan="3" style="width:7.5%;">รวมรับ<br />สุทธิ</th>
+            <th rowspan="3" style="width:11.5%;">ลายมือชื่อ<br />ผู้รับเงิน</th>
+          </tr>
+          <tr>
+            <th rowspan="2" style="width:7%;">เงินเดือน</th>
+            <th colspan="3">ค่าจ้างรายวัน</th>
+            <th rowspan="2" style="width:6%;">ล่วงเวลา</th>
+            <th rowspan="2" style="width:6%;">โบนัส</th>
+            <th rowspan="2" style="width:7.5%;">รวมรายรับ</th>
+            <th rowspan="2" style="width:5.5%;">ภาษี</th>
+            <th rowspan="2" style="width:6.5%;">ประกัน<br />สังคม</th>
+            <th rowspan="2" style="width:5.5%;">อื่นๆ</th>
+          </tr>
+          <tr>
+            <th style="width:5.5%;">วันละ</th>
+            <th style="width:6%;">จำนวน<br />วันทำงาน</th>
+            <th style="width:6.5%;">จำนวนเงิน</th>
+          </tr>
+        </thead>
+        <tbody>${rowsHtml}</tbody>
+        <tfoot>${totalRowHtml}</tfoot>
+      </table>
+
+      <div class="sso-signatures">
+        <div class="sso-sig-col">
+          <div class="sso-sig-line">ลงชื่อ......................................................(นายจ้าง)</div>
+          <div>(......................................................)</div>
+        </div>
+        <div class="sso-sig-col">
+          <div class="sso-sig-line">ลงชื่อ......................................................(ผู้จ่ายเงิน)</div>
+          <div>(......................................................)</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+async function saveSsoReport() {
+  try {
+    const saved = await api('/api/sso-payroll', {
+      method: 'POST',
+      body: JSON.stringify({
+        year_be: state.ssoYearBe,
+        month_num: state.ssoMonthNum,
+        rows: state.ssoRows,
+      }),
+    });
+    state.ssoRows = (saved.rows || []).map((r) => ({ ...r }));
+    renderSsoTable();
+    toast('บันทึกทะเบียนจ่ายเงินเดือน (ประกันสังคม) เรียบร้อยแล้ว');
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+function printSsoReport() {
+  renderSsoPrintPages();
+  setPrintPageOrientation('landscape');
   document.title = getActivePrintDocumentTitle();
   window.print();
 }
