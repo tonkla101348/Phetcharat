@@ -2,6 +2,7 @@ const http = require('http');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const zlib = require('zlib');
 const { exec } = require('child_process');
 const { URL } = require('url');
 const dbMod = require('./src/db');
@@ -9,7 +10,9 @@ const syncMod = require('./src/googleSync');
 const goldPriceMod = require('./src/goldPrice');
 
 const PORT = Number(process.env.PORT) || 3456;
-const PUBLIC_DIR = path.join(__dirname, 'public');
+const PUBLIC_DIR = path.resolve(__dirname, 'public');
+const COMPRESSIBLE_EXTS = new Set(['.html', '.css', '.js', '.json', '.svg']);
+const staticCache = new Map();
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -22,55 +25,140 @@ const MIME_TYPES = {
 };
 
 function sendJson(res, status, data) {
-  const body = JSON.stringify(data);
+  if (res.headersSent) return;
+  const buf = Buffer.from(JSON.stringify(data), 'utf8');
+  const acceptsGzip = /\bgzip\b/i.test(res.req?.headers?.['accept-encoding'] || '');
+  if (acceptsGzip && buf.length >= 1024) {
+    const compressed = zlib.gzipSync(buf, { level: 6 });
+    res.writeHead(status, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Content-Encoding': 'gzip',
+      Vary: 'Accept-Encoding',
+      'Content-Length': compressed.length,
+    });
+    res.end(compressed);
+    return;
+  }
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
+    'Content-Length': buf.length,
   });
-  res.end(body);
+  res.end(buf);
 }
 
 function parseJsonBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let total = 0;
+    let settled = false;
     req.on('data', (chunk) => {
+      if (settled) return;
       total += chunk.length;
       if (total > 5 * 1024 * 1024) {
-        reject(new Error('Request body too large'));
+        settled = true;
+        const err = new Error('Request body too large');
+        err.statusCode = 413;
+        reject(err);
         req.destroy();
         return;
       }
       chunks.push(chunk);
     });
     req.on('end', () => {
+      if (settled) return;
+      settled = true;
       const raw = Buffer.concat(chunks).toString('utf8').trim();
       if (!raw) return resolve({});
       try {
         resolve(JSON.parse(raw));
       } catch {
-        reject(new Error('Invalid JSON body'));
+        const err = new Error('Invalid JSON body');
+        err.statusCode = 400;
+        reject(err);
       }
     });
-    req.on('error', reject);
+    req.on('error', (err) => {
+      if (!settled) {
+        settled = true;
+        reject(err);
+      }
+    });
   });
 }
 
-function serveStatic(reqPath, res) {
-  let cleanPath = reqPath === '/' ? '/index.html' : reqPath;
-  cleanPath = path.normalize(cleanPath).replace(/^(\.\.[\/\\])+/, '');
-  const fullPath = path.join(PUBLIC_DIR, cleanPath);
-  if (!fullPath.startsWith(PUBLIC_DIR) || !fs.existsSync(fullPath) || fs.statSync(fullPath).isDirectory()) {
+function serveStatic(req, res, reqPath) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.writeHead(405, { Allow: 'GET, HEAD', 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Method Not Allowed');
+    return;
+  }
+
+  let decoded;
+  try {
+    decoded = decodeURIComponent(reqPath);
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Bad request');
+    return;
+  }
+
+  const relPath = decoded === '/' ? 'index.html' : decoded.replace(/^\/+/, '');
+  const fullPath = path.resolve(PUBLIC_DIR, relPath);
+  if (!fullPath.startsWith(PUBLIC_DIR + path.sep)) {
     res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('Not found');
     return;
   }
+
+  let stat;
+  try {
+    stat = fs.statSync(fullPath);
+  } catch {
+    stat = null;
+  }
+  if (!stat || stat.isDirectory()) {
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Not found');
+    return;
+  }
+
+  const etag = `"${stat.size}-${Math.trunc(stat.mtimeMs)}"`;
+  if (req.headers['if-none-match'] === etag) {
+    res.writeHead(304, {
+      ETag: etag,
+      'Cache-Control': 'no-cache',
+    });
+    res.end();
+    return;
+  }
+
   const ext = path.extname(fullPath).toLowerCase();
-  res.writeHead(200, {
+  let entry = staticCache.get(fullPath);
+  if (!entry || entry.mtimeMs !== stat.mtimeMs || entry.size !== stat.size) {
+    const raw = fs.readFileSync(fullPath);
+    const gzip = COMPRESSIBLE_EXTS.has(ext) && raw.length >= 1024 ? zlib.gzipSync(raw, { level: 6 }) : null;
+    entry = { mtimeMs: stat.mtimeMs, size: stat.size, etag, raw, gzip };
+    staticCache.set(fullPath, entry);
+  }
+
+  const acceptsGzip = Boolean(entry.gzip) && /\bgzip\b/i.test(req.headers['accept-encoding'] || '');
+  const body = acceptsGzip ? entry.gzip : entry.raw;
+  const headers = {
     'Content-Type': MIME_TYPES[ext] || 'application/octet-stream',
-    'Cache-Control': 'no-store',
-  });
-  fs.createReadStream(fullPath).pipe(res);
+    'Cache-Control': 'no-cache',
+    ETag: entry.etag,
+    'Content-Length': body.length,
+  };
+  if (COMPRESSIBLE_EXTS.has(ext)) {
+    headers.Vary = 'Accept-Encoding';
+  }
+  if (acceptsGzip) {
+    headers['Content-Encoding'] = 'gzip';
+  }
+  res.writeHead(200, headers);
+  res.end(req.method === 'HEAD' ? undefined : body);
 }
 
 async function handleApi(req, res, parsedUrl) {
@@ -429,7 +517,14 @@ async function handleApi(req, res, parsedUrl) {
     if (!url) {
       return sendJson(res, 400, { ok: false, error: 'กรุณากรอก Apps Script Web App URL ก่อนทดสอบ' });
     }
-    const resp = await fetch(url, { method: 'GET', redirect: 'follow' });
+    if (!/^https?:\/\//i.test(url)) {
+      return sendJson(res, 400, { ok: false, error: 'URL ต้องขึ้นต้นด้วย http:// หรือ https://' });
+    }
+    const resp = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: AbortSignal.timeout(15000),
+    });
     const text = await resp.text();
     let parsed;
     try {
@@ -462,15 +557,17 @@ dbMod.seedFromSnapshotsIfEmpty();
 
 const server = http.createServer(async (req, res) => {
   try {
-    const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const parsedUrl = new URL(req.url, 'http://localhost');
     if (parsedUrl.pathname.startsWith('/api/')) {
       await handleApi(req, res, parsedUrl);
     } else {
-      serveStatic(parsedUrl.pathname, res);
+      serveStatic(req, res, parsedUrl.pathname);
     }
   } catch (err) {
     console.error('Server error:', err);
-    sendJson(res, 500, { ok: false, error: err.message || 'Internal server error' });
+    if (!res.headersSent) {
+      sendJson(res, err.statusCode || 500, { ok: false, error: err.message || 'Internal server error' });
+    }
   }
 });
 
@@ -490,3 +587,18 @@ server.listen(PORT, HOST, () => {
     exec(`start "" "http://localhost:${PORT}"`);
   }
 });
+
+function shutdown() {
+  server.close(() => {
+    try {
+      dbMod.db.close();
+    } catch {
+      // ignore
+    }
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(0), 3000).unref();
+}
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);

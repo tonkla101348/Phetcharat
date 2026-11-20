@@ -133,15 +133,29 @@ function esc(str) {
     .replace(/'/g, '&#39;');
 }
 
+function escJsAttr(str) {
+  return esc(
+    String(str ?? '')
+      .replace(/\\/g, '\\\\')
+      .replace(/'/g, "\\'")
+      .replace(/\r/g, '\\r')
+      .replace(/\n/g, '\\n')
+  );
+}
+
+const NF_MONEY = new Intl.NumberFormat('th-TH', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+const NF_WEIGHT = new Intl.NumberFormat('th-TH', { minimumFractionDigits: 1, maximumFractionDigits: 2 });
+const NF_DEC2 = new Intl.NumberFormat('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const NF_INT = new Intl.NumberFormat('th-TH', { maximumFractionDigits: 0 });
+
 function fmtMoney(n) {
-  const num = Number(n || 0);
-  return num.toLocaleString('th-TH', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  return NF_MONEY.format(Number(n || 0));
 }
 
 function fmtWeight(n) {
   const num = Number(n || 0);
   if (num === 0) return '-';
-  return num.toLocaleString('th-TH', { minimumFractionDigits: 1, maximumFractionDigits: 2 });
+  return NF_WEIGHT.format(num);
 }
 
 function fmtThaiShort(iso) {
@@ -232,10 +246,16 @@ async function api(url, opts = {}) {
   return data.data !== undefined ? data.data : data;
 }
 
-let debounceTimer = null;
-function debounce(fn, ms = 220) {
-  clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(fn, ms);
+const debounceTimers = new Map();
+function debounce(key, fn, ms = 220) {
+  clearTimeout(debounceTimers.get(key));
+  debounceTimers.set(key, setTimeout(fn, ms));
+}
+
+const reqSeq = {};
+function nextReqSeq(key) {
+  reqSeq[key] = (reqSeq[key] || 0) + 1;
+  return reqSeq[key];
 }
 
 function switchTab(tabName) {
@@ -279,12 +299,14 @@ function changeDashboardYear(yr) {
 }
 
 async function loadDashboard() {
+  const seq = nextReqSeq('dashboard');
   try {
     const qYear = state.dashboardYear ? `?year=${encodeURIComponent(state.dashboardYear)}` : '';
     const d = await api(`/api/dashboard${qYear}`);
+    if (seq !== reqSeq.dashboard) return;
     document.getElementById('header-date-label').textContent = `วันนี้ ${d.todayLong} • ระบบจัดการร้านทองเพชรรัตน์ (ซิงค์ Google Sheets Real-Time)`;
-    document.getElementById('nav-badge-pawn').textContent = d.pawnSummary.activeCount.toLocaleString('th-TH');
-    document.getElementById('nav-badge-overdue').textContent = d.pawnSummary.overdueCount.toLocaleString('th-TH');
+    document.getElementById('nav-badge-pawn').textContent = NF_INT.format(d.pawnSummary.activeCount);
+    document.getElementById('nav-badge-overdue').textContent = NF_INT.format(d.pawnSummary.overdueCount);
     updateSyncPill(d.syncSummary);
 
     const latestCash = d.latestDay?.summary?.actual_cash ?? d.latestDay?.summary?.expected_cash ?? 0;
@@ -335,7 +357,9 @@ async function loadDashboard() {
     }
 
     // Top overdue
-    const ovRows = (d.topOverdue || []).slice(0, 6).map((t) => `
+    const ovRows = (d.topOverdue || []).slice(0, 6).map((t) => {
+      state.pawnTicketsMap[t.id] = t;
+      return `
       <tr>
         <td><strong>${esc(t.ticket_no)}</strong></td>
         <td>${esc(t.customer_name)}</td>
@@ -346,7 +370,8 @@ async function loadDashboard() {
           <button class="btn btn-sm btn-primary" onclick="openPawnActionModal(${t.id}, 'pay_interest')">ต่อดอก</button>
         </td>
       </tr>
-    `).join('');
+    `;
+    }).join('');
     document.getElementById('dash-overdue-body').innerHTML = `
       <div class="table-wrap">
         <table class="data-table">
@@ -381,7 +406,7 @@ async function loadDashboard() {
         .join('');
     }
     const annRows = ann.months.map((m) => `
-      <tr style="cursor:pointer" onclick="openAccountMonth('${esc(m.month_key)}')">
+      <tr style="cursor:pointer" onclick="openAccountMonth('${escJsAttr(m.month_key)}')">
         <td><strong>${esc(m.month_key)}</strong></td>
         <td class="num">${fmtWeight(m.totals.new_gold_g)}</td>
         <td class="num text-inc">${fmtMoney(m.totals.inc_sell)}</td>
@@ -447,7 +472,12 @@ async function loadDashboard() {
 /* ==================== PAWN TICKETS ==================== */
 function debouncedLoadPawn() {
   state.pawnPage = 0;
-  debounce(loadPawnTable);
+  debounce('pawn', loadPawnTable);
+}
+
+function onPawnSheetFilterChange() {
+  state.pawnPage = 0;
+  loadPawnTable();
 }
 
 function setPawnStatusFilter(status, btn) {
@@ -464,16 +494,23 @@ function changePawnPage(delta) {
 }
 
 async function loadPawnTable() {
+  const seq = nextReqSeq('pawn');
   try {
     const search = document.getElementById('pawn-search').value.trim();
     const sheet = document.getElementById('pawn-sheet-filter').value;
     const offset = state.pawnPage * state.pawnLimit;
     const url = `/api/pawn?search=${encodeURIComponent(search)}&status=${encodeURIComponent(state.pawnStatus)}&sheet=${encodeURIComponent(sheet)}&limit=${state.pawnLimit}&offset=${offset}`;
     const res = await api(url);
+    if (seq !== reqSeq.pawn) return;
+
+    if (state.pawnPage > 0 && offset >= res.totalFiltered && res.totalFiltered > 0) {
+      state.pawnPage = Math.max(0, Math.ceil(res.totalFiltered / state.pawnLimit) - 1);
+      return loadPawnTable();
+    }
 
     const s = res.summary;
-    document.getElementById('nav-badge-pawn').textContent = s.activeCount.toLocaleString('th-TH');
-    document.getElementById('nav-badge-overdue').textContent = s.overdueCount.toLocaleString('th-TH');
+    document.getElementById('nav-badge-pawn').textContent = NF_INT.format(s.activeCount);
+    document.getElementById('nav-badge-overdue').textContent = NF_INT.format(s.overdueCount);
 
     document.getElementById('pawn-kpis').innerHTML = `
       <div class="kpi-card">
@@ -499,7 +536,7 @@ async function loadPawnTable() {
     `;
 
     const totalPages = Math.max(1, Math.ceil(res.totalFiltered / state.pawnLimit));
-    document.getElementById('pawn-result-count').textContent = `พบทั้งหมด ${res.totalFiltered.toLocaleString('th-TH')} รายการ`;
+    document.getElementById('pawn-result-count').textContent = `พบทั้งหมด ${NF_INT.format(res.totalFiltered)} รายการ`;
     document.getElementById('pawn-page-info').textContent = `หน้า ${state.pawnPage + 1} / ${totalPages}`;
     document.getElementById('pawn-prev-btn').disabled = state.pawnPage === 0;
     document.getElementById('pawn-next-btn').disabled = state.pawnPage + 1 >= totalPages;
@@ -519,16 +556,18 @@ async function loadPawnTable() {
             ? 'badge-bad'
             : 'badge-active';
 
+        const tkJs = escJsAttr(t.ticket_no);
+        const custJs = escJsAttr(t.customer_name || '');
         const actionsHtml = t.is_active
           ? `
             <button class="btn btn-sm btn-primary" onclick="openPawnActionModal(${t.id}, 'pay_interest')">ต่อดอก</button>
             <button class="btn btn-sm btn-emerald" onclick="openPawnActionModal(${t.id}, 'redeem')">ไถ่ถอน</button>
             <button class="btn btn-sm btn-outline" onclick="openPawnActionModal(${t.id}, 'edit')">จัดการ</button>
-            <button class="btn btn-sm btn-danger-outline" onclick="deletePawnTicketConfirm(${t.id}, '${esc(t.ticket_no)}', '${esc(t.customer_name || '')}')">ลบ</button>
+            <button class="btn btn-sm btn-danger-outline" onclick="deletePawnTicketConfirm(${t.id}, '${tkJs}', '${custJs}')">ลบ</button>
           `
           : `
             <button class="btn btn-sm btn-outline" onclick="openPawnActionModal(${t.id}, 'edit')">ดู / แก้ไข</button>
-            <button class="btn btn-sm btn-danger-outline" onclick="deletePawnTicketConfirm(${t.id}, '${esc(t.ticket_no)}', '${esc(t.customer_name || '')}')">ลบ</button>
+            <button class="btn btn-sm btn-danger-outline" onclick="deletePawnTicketConfirm(${t.id}, '${tkJs}', '${custJs}')">ลบ</button>
           `;
 
         return `
@@ -559,14 +598,18 @@ async function loadPawnTable() {
 
 /* ==================== OVERDUE (คนหลุดจำ) ==================== */
 function debouncedLoadOverdue() {
-  debounce(loadOverdueTable);
+  debounce('overdue', loadOverdueTable);
 }
 
 async function loadOverdueTable() {
+  const seq = nextReqSeq('overdue');
   try {
     const search = document.getElementById('overdue-search').value.trim();
     const res = await api(`/api/pawn?overdueOnly=1&search=${encodeURIComponent(search)}&limit=500`);
+    if (seq !== reqSeq.overdue) return;
     const s = res.summary;
+    document.getElementById('nav-badge-pawn').textContent = NF_INT.format(s.activeCount);
+    document.getElementById('nav-badge-overdue').textContent = NF_INT.format(s.overdueCount);
     document.getElementById('overdue-asof').textContent = `อัปเดต ณ วันที่ ${fmtThaiLong(s.refTodayIso)} • คัดกรองเฉพาะรายการที่ยังไม่ไถ่และเกินกำหนดตัดดอก`;
 
     document.getElementById('overdue-kpis').innerHTML = `
@@ -606,7 +649,7 @@ async function loadOverdueTable() {
               <div class="action-btn-group">
                 <button class="btn btn-sm btn-primary" onclick="openPawnActionModal(${t.id}, 'pay_interest')">ต่อดอก</button>
                 <button class="btn btn-sm btn-emerald" onclick="openPawnActionModal(${t.id}, 'redeem')">ไถ่ถอน</button>
-                <button class="btn btn-sm btn-danger-outline" onclick="markTicketForfeited(${t.id}, '${esc(t.ticket_no)}')">หลุดจำนำ</button>
+                <button class="btn btn-sm btn-danger-outline" onclick="markTicketForfeited(${t.id}, '${escJsAttr(t.ticket_no)}')">หลุดจำนำ</button>
               </div>
             </td>
           </tr>
@@ -627,7 +670,6 @@ async function markTicketForfeited(id, ticketNo) {
     });
     toast(`อัปเดตเลขที่ ${ticketNo} เป็น "หลุดจำ" แล้ว`);
     loadOverdueTable();
-    loadDashboard();
   } catch (err) {
     toast(err.message, 'error');
   }
@@ -664,12 +706,14 @@ function selectAccountYear(yr) {
 }
 
 async function loadAccountView() {
+  const seq = nextReqSeq('account');
   try {
     const params = new URLSearchParams();
     if (state.accountActiveMonth) params.set('month', state.accountActiveMonth);
     if (state.accountActiveYear) params.set('year', state.accountActiveYear);
     const qs = params.toString();
     const data = await api(`/api/account${qs ? '?' + qs : ''}`);
+    if (seq !== reqSeq.account) return;
     state.accountCache = data;
 
     const activeYear = data.activeYear || 2569;
@@ -691,7 +735,7 @@ async function loadAccountView() {
     document.getElementById('account-month-tabs').innerHTML = data.months
       .map(
         (m) => `
-      <button class="month-tab ${m.month_key === state.accountActiveMonth ? 'active' : ''}" onclick="selectAccountMonth('${esc(m.month_key)}')">
+      <button class="month-tab ${m.month_key === state.accountActiveMonth ? 'active' : ''}" onclick="selectAccountMonth('${escJsAttr(m.month_key)}')">
         ${esc(m.month_key)}
       </button>
     `
@@ -791,9 +835,9 @@ function renderAccountDays() {
             <div class="day-cash-box">
               <span>เงินสดจริง:</span>
               <input type="number" step="0.01" class="day-cash-input" id="cash-input-${esc(day.date_iso)}" value="${s.actual_cash !== null ? s.actual_cash : ''}" placeholder="กรอกยอดนับจริง" />
-              <button class="btn btn-sm btn-primary" onclick="saveDailyCash('${esc(day.date_iso)}')">บันทึกเงินสด</button>
+              <button class="btn btn-sm btn-primary" onclick="saveDailyCash('${escJsAttr(day.date_iso)}')">บันทึกเงินสด</button>
               ${diffBadge}
-              <button class="btn btn-sm btn-emerald" onclick="openAccountEntryModal('${esc(day.date_iso)}')">+ เพิ่มรายการวันนี้</button>
+              <button class="btn btn-sm btn-emerald" onclick="openAccountEntryModal('${escJsAttr(day.date_iso)}')">+ เพิ่มรายการวันนี้</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -899,8 +943,7 @@ function fmtVatDate(iso) {
 }
 
 function fmtVatDec(n) {
-  const num = Number(n || 0);
-  return num.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return NF_DEC2.format(Number(n || 0));
 }
 
 function openVatReportForCurrentMonth() {
@@ -921,12 +964,14 @@ function selectVatMonth(monthKey) {
 }
 
 async function loadVatView() {
+  const seq = nextReqSeq('vat');
   try {
     const params = new URLSearchParams();
     if (state.vatActiveMonth) params.set('month', state.vatActiveMonth);
     if (state.vatActiveYear) params.set('year', state.vatActiveYear);
     const qs = params.toString();
     const d = await api(`/api/account/vat-report${qs ? '?' + qs : ''}`);
+    if (seq !== reqSeq.vat) return;
     state.vatCache = d;
     state.vatActiveYear = String(d.activeYear || 2569);
     state.vatActiveMonth = d.monthKey || '';
@@ -993,18 +1038,10 @@ function renderVatFooter() {
 function renderVatTable() {
   const tbody = document.getElementById('vat-tbody');
   if (!tbody) return;
-  const hideRepeatDate = document.getElementById('vat-hide-repeat-date')?.checked;
-  let prevDate = '';
 
   const rowsHtml = state.vatRows
     .map((r, idx) => {
-      const dateStr = fmtVatDate(r.date_iso);
-      const printDateStr = hideRepeatDate && r.date_iso === prevDate ? '' : dateStr;
-      prevDate = r.date_iso;
-      const barPrint = Number(r.gold_bar_price) ? fmtVatDec(r.gold_bar_price) : '';
-      const salePrint = Number(r.sale_amount) ? fmtMoney(r.sale_amount) : '';
       const hasTaxCalc = Number(r.gold_bar_price) > 0 || Number(r.exempt_base) > 0;
-      const exemptPrint = hasTaxCalc ? fmtVatDec(r.exempt_base) : '';
       const taxablePrint = hasTaxCalc ? fmtVatDec(r.taxable_base) : '';
       const vatPrint = hasTaxCalc ? fmtVatDec(r.vat_amount) : '';
 
@@ -1014,37 +1051,31 @@ function renderVatTable() {
             <div class="screen-only">
               <input type="date" value="${esc(r.date_iso || '')}" onchange="onVatRowChange(${idx}, 'date_iso', this.value)" />
             </div>
-            <span class="print-only">${esc(printDateStr)}</span>
           </td>
           <td>
             <div class="screen-only">
               <input type="text" value="${esc(r.invoice_no || '')}" placeholder="เล่มที่/เลขที่" onchange="onVatRowChange(${idx}, 'invoice_no', this.value)" />
             </div>
-            <span class="print-only" id="vat-p-inv-${idx}">${esc(r.invoice_no || '')}</span>
           </td>
           <td class="num">
             <div class="screen-only">
               <input type="number" step="0.01" class="num" value="${r.gold_bar_price || ''}" placeholder="ราคาทองรูปพรรณ" onchange="onVatRowChange(${idx}, 'gold_bar_price', this.value)" />
             </div>
-            <span class="print-only" id="vat-p-bar-${idx}">${esc(barPrint)}</span>
           </td>
           <td>
             <div class="screen-only">
               <input type="text" value="${esc(r.item_desc || '')}" placeholder="เช่น คอ 3.8g" onchange="onVatRowChange(${idx}, 'item_desc', this.value)" />
             </div>
-            <span class="print-only" id="vat-p-item-${idx}">${esc(r.item_desc || '')}</span>
           </td>
           <td class="num">
             <div class="screen-only">
               <input type="number" step="0.01" class="num" value="${r.sale_amount ?? ''}" onchange="onVatRowChange(${idx}, 'sale_amount', this.value)" />
             </div>
-            <span class="print-only" id="vat-p-sale-${idx}">${esc(salePrint)}</span>
           </td>
           <td class="num">
             <div class="screen-only">
               <input type="number" step="0.01" class="num" id="vat-in-exempt-${idx}" value="${hasTaxCalc ? (r.exempt_base ?? '') : ''}" onchange="onVatRowChange(${idx}, 'exempt_base', this.value)" />
             </div>
-            <span class="print-only" id="vat-p-exempt-${idx}">${esc(exemptPrint)}</span>
           </td>
           <td class="num" id="vat-cell-taxable-${idx}">${esc(taxablePrint)}</td>
           <td class="num" id="vat-cell-vat-${idx}">${esc(vatPrint)}</td>
@@ -1061,7 +1092,6 @@ function renderVatTable() {
     '<tr class="no-print"><td colspan="9" class="center muted" style="padding:18px;">ยังไม่มีรายการในเดือนนี้ — กด "ดึงรายการขายทองจากสมุดบัญชี" หรือ "+ เพิ่มแถว"</td></tr>';
   initDateInputs(tbody);
   renderVatFooter();
-  renderVatPrintPages();
 }
 
 function buildVatPrintPagesHtml({ rows = [], monthFull = '', yearFull = '', hideRepeatDate = true, showTotal = true } = {}) {
@@ -1195,17 +1225,11 @@ function onVatRowChange(idx, field, val) {
 
   if (field === 'invoice_no' || field === 'buyer_name') {
     row[field] = String(val || '').trim();
-    const mapId = field === 'invoice_no' ? `vat-p-inv-${idx}` : `vat-p-buyer-${idx}`;
-    const el = document.getElementById(mapId);
-    if (el) el.textContent = row[field];
-    renderVatPrintPages();
     return;
   }
 
   if (field === 'item_desc') {
     row.item_desc = String(val || '').trim();
-    const el = document.getElementById(`vat-p-item-${idx}`);
-    if (el) el.textContent = row.item_desc;
     const parsedW = extractWeightFromDesc(row.item_desc);
     if (parsedW > 0) {
       row.weight_g = parsedW;
@@ -1239,19 +1263,12 @@ function onVatRowChange(idx, field, val) {
   row.taxable_base = hasTaxCalc ? round2Client((Number(row.sale_amount) || 0) - (Number(row.exempt_base) || 0)) : 0;
   row.vat_amount = hasTaxCalc ? round2Client(row.taxable_base * 0.07) : 0;
 
-  const pBar = document.getElementById(`vat-p-bar-${idx}`);
-  const pSale = document.getElementById(`vat-p-sale-${idx}`);
-  const pEx = document.getElementById(`vat-p-exempt-${idx}`);
   const cTax = document.getElementById(`vat-cell-taxable-${idx}`);
   const cVat = document.getElementById(`vat-cell-vat-${idx}`);
-  if (pBar) pBar.textContent = Number(row.gold_bar_price) ? fmtVatDec(row.gold_bar_price) : '';
-  if (pSale) pSale.textContent = Number(row.sale_amount) ? fmtMoney(row.sale_amount) : '';
-  if (pEx) pEx.textContent = hasTaxCalc ? fmtVatDec(row.exempt_base) : '';
   if (cTax) cTax.textContent = hasTaxCalc ? fmtVatDec(row.taxable_base) : '';
   if (cVat) cVat.textContent = hasTaxCalc ? fmtVatDec(row.vat_amount) : '';
 
   renderVatFooter();
-  renderVatPrintPages();
 }
 
 function applyDefaultGoldBarPrice() {
@@ -1568,6 +1585,7 @@ function selectGtaPeriod() {
 }
 
 async function loadGtaView(forceRefresh = false) {
+  const seq = nextReqSeq('gta');
   try {
     const params = new URLSearchParams();
     if (state.gtaYearBe) params.set('year', String(state.gtaYearBe));
@@ -1575,6 +1593,7 @@ async function loadGtaView(forceRefresh = false) {
     if (forceRefresh) params.set('refresh', '1');
     const qs = params.toString();
     const d = await api(`/api/gta-price-report${qs ? '?' + qs : ''}`);
+    if (seq !== reqSeq.gta) return;
 
     const samePeriod = state.gtaYearBe === Number(d.yearBe) && state.gtaMonthNum === Number(d.monthNum);
     state.gtaYearBe = Number(d.yearBe);
@@ -1704,7 +1723,6 @@ function onGtaRowChange(idx, field, val) {
     const raw = String(val ?? '').trim();
     row[field] = raw === '' ? null : round2Client(Number(raw) || 0);
   }
-  renderGtaPrintPages();
 }
 
 function toggleGtaClosedNote(idx) {
@@ -1753,8 +1771,6 @@ function renderGtaTable() {
     `
     )
     .join('');
-
-  renderGtaPrintPages();
 }
 
 function buildGtaPrintPageHtml({ rows = [], monthFull = '', yearFull = '' } = {}) {
@@ -1882,12 +1898,14 @@ function selectSsoPeriod() {
 }
 
 async function loadSsoView() {
+  const seq = nextReqSeq('sso');
   try {
     const params = new URLSearchParams();
     if (state.ssoYearBe) params.set('year', String(state.ssoYearBe));
     if (state.ssoMonthNum) params.set('month_num', String(state.ssoMonthNum));
     const qs = params.toString();
     const d = await api(`/api/sso-payroll${qs ? '?' + qs : ''}`);
+    if (seq !== reqSeq.sso) return;
 
     state.ssoYearBe = Number(d.yearBe);
     state.ssoMonthNum = Number(d.monthNum);
@@ -1921,9 +1939,7 @@ function fmtSsoNum(val) {
   if (val === null || val === undefined || val === '') return '';
   const num = Number(val);
   if (!Number.isFinite(num) || num === 0) return '';
-  return Number.isInteger(num)
-    ? num.toLocaleString('th-TH', { maximumFractionDigits: 0 })
-    : num.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return Number.isInteger(num) ? NF_INT.format(num) : NF_DEC2.format(num);
 }
 
 function fmtSsoNetDisplay(val) {
@@ -1970,7 +1986,6 @@ function onSsoRowChange(idx, field, val) {
   const netCell = document.getElementById(`sso-net-${idx}`);
   if (netCell) netCell.textContent = fmtSsoNetDisplay(row.net_pay);
   renderSsoFooter();
-  renderSsoPrintPages();
 }
 
 function addSsoRow() {
@@ -2037,7 +2052,6 @@ function renderSsoTable() {
     .join('');
 
   renderSsoFooter();
-  renderSsoPrintPages();
 }
 
 function buildSsoPrintPageHtml({ rows = [], monthFull = '', yearFull = '' } = {}) {
@@ -2244,6 +2258,7 @@ function openCombinedPdfModal() {
 }
 
 async function loadCombinedPdfPreview() {
+  const seq = nextReqSeq('combined');
   const yearBe = Number(document.getElementById('combined-year-select')?.value || 0);
   const monthNum = Number(document.getElementById('combined-month-select')?.value || 0);
   const btn = document.getElementById('combined-print-btn');
@@ -2251,6 +2266,7 @@ async function loadCombinedPdfPreview() {
 
   try {
     const d = await api(`/api/monthly-bundle?year=${encodeURIComponent(yearBe)}&month_num=${encodeURIComponent(monthNum)}`);
+    if (seq !== reqSeq.combined) return;
 
     // Overlay unsaved live edits if the selected period matches what is open in a tab
     const vatStatePeriod = getPeriodForVatState();
@@ -2371,11 +2387,13 @@ async function printCombinedMonthlyPdf() {
 
 /* ==================== STOCK (Stock ทอง) ==================== */
 async function loadStockView() {
+  const seq = nextReqSeq('stock');
   try {
     const picker = document.getElementById('stock-date-picker');
     if (!picker.value) picker.value = getTodayIso();
-    initDateInputs();
+    initDateInputs(picker.parentElement || document);
     const d = await api(`/api/stock?date=${encodeURIComponent(picker.value)}`);
+    if (seq !== reqSeq.stock) return;
     state.stockCache = d;
 
     document.getElementById('stock-kpis').innerHTML = `
@@ -2448,7 +2466,7 @@ async function loadStockView() {
         <td class="num"><strong>${fmtWeight(h.endOldGoldG)}</strong></td>
         <td class="num"><strong>${fmtWeight(h.endNewGoldG)}</strong></td>
         <td class="center">
-          <button class="btn btn-sm btn-outline" onclick="jumpStockDate('${esc(h.date_iso)}')">เลือกวันนี้</button>
+          <button class="btn btn-sm btn-outline" onclick="jumpStockDate('${escJsAttr(h.date_iso)}')">เลือกวันนี้</button>
         </td>
       </tr>
     `
@@ -2477,7 +2495,7 @@ function renderSyncSheetLinks(cfg, accountSheetsByYear) {
   const accLinks = years
     .map(
       (yr, idx) => `
-      <a class="sheet-link-item" href="https://docs.google.com/spreadsheets/d/${esc(accountSheetsByYear[yr])}/edit" target="_blank">
+      <a class="sheet-link-item" href="https://docs.google.com/spreadsheets/d/${esc(accountSheetsByYear[yr])}/edit" target="_blank" rel="noopener noreferrer">
         <strong>${idx + 2}. รายรับรายจ่าย ${esc(yr)}</strong>
         <span>เปิดไฟล์ Google Sheets ↗</span>
       </a>`
@@ -2485,12 +2503,12 @@ function renderSyncSheetLinks(cfg, accountSheetsByYear) {
     .join('');
 
   box.innerHTML = `
-    <a class="sheet-link-item" href="https://docs.google.com/spreadsheets/d/${esc(pawnId)}/edit" target="_blank">
+    <a class="sheet-link-item" href="https://docs.google.com/spreadsheets/d/${esc(pawnId)}/edit" target="_blank" rel="noopener noreferrer">
       <strong>1. จำนำทอง เริ่ม 4818</strong>
       <span>เปิดไฟล์ Google Sheets ↗</span>
     </a>
     ${accLinks}
-    <a class="sheet-link-item" href="https://docs.google.com/spreadsheets/d/${esc(stockId)}/edit" target="_blank">
+    <a class="sheet-link-item" href="https://docs.google.com/spreadsheets/d/${esc(stockId)}/edit" target="_blank" rel="noopener noreferrer">
       <strong>${years.length + 2}. Stock ทอง เริ่ม 20/4/69</strong>
       <span>เปิดไฟล์ Google Sheets ↗</span>
     </a>
@@ -2604,7 +2622,6 @@ async function saveSyncConfig() {
     });
     toast('บันทึกการตั้งค่า Google Sheets แล้ว');
     loadSyncView();
-    loadDashboard();
   } catch (err) {
     toast(err.message, 'error');
   }
@@ -2650,11 +2667,28 @@ async function pullFromGoogleSheetsNow() {
   }
 }
 
-function copyCodeGs() {
+async function copyCodeGs() {
   const ta = document.getElementById('sync-code-gs');
+  if (!ta) return;
   ta.select();
-  navigator.clipboard?.writeText(ta.value);
-  toast('คัดลอกโค้ด Code.gs แล้ว! นำไปวางใน Google Apps Script ได้เลย');
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(ta.value);
+      toast('คัดลอกโค้ด Code.gs แล้ว! นำไปวางใน Google Apps Script ได้เลย');
+      return;
+    }
+  } catch {
+    // Fallback to execCommand below for non-HTTPS LAN access
+  }
+  try {
+    if (document.execCommand('copy')) {
+      toast('คัดลอกโค้ด Code.gs แล้ว! นำไปวางใน Google Apps Script ได้เลย');
+      return;
+    }
+  } catch {
+    // ignore
+  }
+  toast('คัดลอกอัตโนมัติไม่สำเร็จ กรุณากด Ctrl+C เพื่อคัดลอก', 'error');
 }
 
 /* ==================== MODALS ==================== */
@@ -2795,30 +2829,44 @@ function appendChip(inputId, text) {
   el.value = el.value.trim() ? `${el.value.trim()}, ${text}` : text;
 }
 
+async function withSubmitLock(form, fn) {
+  const btn = form?.querySelector('button[type="submit"]');
+  if (btn?.disabled) return;
+  if (btn) btn.disabled = true;
+  try {
+    await fn();
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function submitNewPawn(e) {
   e.preventDefault();
-  try {
-    const payload = {
-      ticket_no: document.getElementById('np-ticket-no').value.trim(),
-      pawn_date: document.getElementById('np-date').value,
-      customer_name: document.getElementById('np-customer').value.trim(),
-      item_desc: document.getElementById('np-item').value.trim(),
-      item_qty: document.getElementById('np-qty')?.value.trim() || '',
-      weight_g: Number(document.getElementById('np-weight').value || 0),
-      note: document.getElementById('np-note').value.trim(),
-      term_raw: document.getElementById('np-term').value,
-      principal: Number(document.getElementById('np-principal').value || 0),
-      record_account: document.getElementById('np-record-account').checked,
-      transfer_amount: Number(document.getElementById('np-transfer').value || 0),
-    };
-    const res = await api('/api/pawn', { method: 'POST', body: JSON.stringify(payload) });
-    closeModal();
-    toast(`บันทึกรับจำนำเลขที่ ${res.ticket.ticket_no} เรียบร้อยแล้ว`);
-    if (state.activeTab === 'pawn') loadPawnTable();
-    else if (state.activeTab === 'dashboard') loadDashboard();
-  } catch (err) {
-    toast(err.message, 'error');
-  }
+  await withSubmitLock(e.target, async () => {
+    try {
+      const payload = {
+        ticket_no: document.getElementById('np-ticket-no').value.trim(),
+        pawn_date: document.getElementById('np-date').value,
+        customer_name: document.getElementById('np-customer').value.trim(),
+        item_desc: document.getElementById('np-item').value.trim(),
+        item_qty: document.getElementById('np-qty')?.value.trim() || '',
+        weight_g: Number(document.getElementById('np-weight').value || 0),
+        note: document.getElementById('np-note').value.trim(),
+        term_raw: document.getElementById('np-term').value,
+        principal: Number(document.getElementById('np-principal').value || 0),
+        record_account: document.getElementById('np-record-account').checked,
+        transfer_amount: Number(document.getElementById('np-transfer').value || 0),
+      };
+      const res = await api('/api/pawn', { method: 'POST', body: JSON.stringify(payload) });
+      closeModal();
+      toast(`บันทึกรับจำนำเลขที่ ${res.ticket.ticket_no} เรียบร้อยแล้ว`);
+      if (state.activeTab === 'pawn') loadPawnTable();
+      else if (state.activeTab === 'dashboard') loadDashboard();
+      else if (state.activeTab === 'account') loadAccountView();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
 }
 
 function openQuickPawnLookup() {
@@ -2827,7 +2875,7 @@ function openQuickPawnLookup() {
     `
     <div class="form-group">
       <label>พิมพ์เลขที่จำนำ หรือ ชื่อลูกค้า</label>
-      <input type="text" id="ql-input" placeholder="เช่น 6008, 6320, ชื่อลูกค้า..." oninput="runQuickLookup(this.value)" autofocus />
+      <input type="text" id="ql-input" placeholder="เช่น 6008, 6320, ชื่อลูกค้า..." oninput="debouncedQuickLookup(this.value)" autofocus />
     </div>
     <div id="ql-results" class="table-wrap" style="max-height:360px;overflow-y:auto;"></div>
   `
@@ -2835,10 +2883,18 @@ function openQuickPawnLookup() {
   runQuickLookup('');
 }
 
+function debouncedQuickLookup(q) {
+  debounce('quickLookup', () => runQuickLookup(q), 180);
+}
+
 async function runQuickLookup(q) {
+  const seq = nextReqSeq('quickLookup');
   try {
     const res = await api(`/api/pawn?status=active&search=${encodeURIComponent(q)}&limit=12`);
-    document.getElementById('ql-results').innerHTML = `
+    if (seq !== reqSeq.quickLookup) return;
+    const box = document.getElementById('ql-results');
+    if (!box) return;
+    box.innerHTML = `
       <table class="data-table">
         <thead><tr><th>เลขที่</th><th>ชื่อลูกค้า</th><th>รายการ</th><th class="num">เงินต้น</th><th class="center">ดำเนินการ</th></tr></thead>
         <tbody>
@@ -2898,7 +2954,7 @@ function openPawnActionModal(id, defaultAction = 'pay_interest') {
     <form onsubmit="submitPawnAction(event, ${t.id})">
       <div id="pa-dynamic-fields"></div>
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:14px;">
-        <button type="button" class="btn btn-danger-outline" onclick="deletePawnTicketConfirm(${t.id}, '${esc(t.ticket_no)}', '${esc(t.customer_name || '')}')">ลบรายการจำนำ</button>
+        <button type="button" class="btn btn-danger-outline" onclick="deletePawnTicketConfirm(${t.id}, '${escJsAttr(t.ticket_no)}', '${escJsAttr(t.customer_name || '')}')">ลบรายการจำนำ</button>
         <div style="display:flex;gap:8px;">
           <button type="button" class="btn btn-outline" onclick="closeModal()">ยกเลิก</button>
           <button type="submit" class="btn btn-primary">ยืนยันบันทึก</button>
@@ -2975,48 +3031,51 @@ function renderPawnActionFields(id, defaultDate = getTodayIso()) {
 
 async function submitPawnAction(e, id) {
   e.preventDefault();
-  const action = document.getElementById('pa-action').value;
-  const payload = { action };
+  await withSubmitLock(e.target, async () => {
+    const action = document.getElementById('pa-action').value;
+    const payload = { action };
 
-  if (action === 'pay_interest') {
-    payload.date_iso = document.getElementById('pa-date').value;
-    payload.interest_paid = Number(document.getElementById('pa-interest').value || 0);
-    payload.record_account = document.getElementById('pa-acc').checked;
-    payload.transfer_amount = Number(document.getElementById('pa-transfer').value || 0);
-  } else if (action === 'redeem') {
-    payload.date_iso = document.getElementById('pa-date').value;
-    payload.interest_paid = Number(document.getElementById('pa-interest').value || 0);
-    payload.status_text = document.getElementById('pa-status-text').value;
-    payload.record_account = document.getElementById('pa-acc').checked;
-    payload.transfer_amount = Number(document.getElementById('pa-transfer').value || 0);
-  } else if (action === 'reduce_principal' || action === 'increase_principal') {
-    payload.date_iso = document.getElementById('pa-date').value;
-    payload.amount = Number(document.getElementById('pa-amount').value || 0);
-    payload.interest_paid = Number(document.getElementById('pa-interest').value || 0);
-    payload.record_account = document.getElementById('pa-acc').checked;
-    payload.transfer_amount = Number(document.getElementById('pa-transfer').value || 0);
-  } else if (action === 'edit') {
-    payload.customer_name = document.getElementById('pa-cust').value;
-    payload.item_desc = document.getElementById('pa-item').value;
-    payload.weight_g = Number(document.getElementById('pa-weight').value || 0);
-    payload.principal = Number(document.getElementById('pa-principal').value || 0);
-    payload.term_months = document.getElementById('pa-term').value;
-    payload.term_raw = document.getElementById('pa-term').value;
-    payload.status = document.getElementById('pa-status').value;
-    payload.redeem_date = document.getElementById('pa-redeem-date').value;
-    payload.note = document.getElementById('pa-note').value;
-  }
+    if (action === 'pay_interest') {
+      payload.date_iso = document.getElementById('pa-date').value;
+      payload.interest_paid = Number(document.getElementById('pa-interest').value || 0);
+      payload.record_account = document.getElementById('pa-acc').checked;
+      payload.transfer_amount = Number(document.getElementById('pa-transfer').value || 0);
+    } else if (action === 'redeem') {
+      payload.date_iso = document.getElementById('pa-date').value;
+      payload.interest_paid = Number(document.getElementById('pa-interest').value || 0);
+      payload.status_text = document.getElementById('pa-status-text').value;
+      payload.record_account = document.getElementById('pa-acc').checked;
+      payload.transfer_amount = Number(document.getElementById('pa-transfer').value || 0);
+    } else if (action === 'reduce_principal' || action === 'increase_principal') {
+      payload.date_iso = document.getElementById('pa-date').value;
+      payload.amount = Number(document.getElementById('pa-amount').value || 0);
+      payload.interest_paid = Number(document.getElementById('pa-interest').value || 0);
+      payload.record_account = document.getElementById('pa-acc').checked;
+      payload.transfer_amount = Number(document.getElementById('pa-transfer').value || 0);
+    } else if (action === 'edit') {
+      payload.customer_name = document.getElementById('pa-cust').value;
+      payload.item_desc = document.getElementById('pa-item').value;
+      payload.weight_g = Number(document.getElementById('pa-weight').value || 0);
+      payload.principal = Number(document.getElementById('pa-principal').value || 0);
+      payload.term_months = document.getElementById('pa-term').value;
+      payload.term_raw = document.getElementById('pa-term').value;
+      payload.status = document.getElementById('pa-status').value;
+      payload.redeem_date = document.getElementById('pa-redeem-date').value;
+      payload.note = document.getElementById('pa-note').value;
+    }
 
-  try {
-    const res = await api(`/api/pawn/${id}/action`, { method: 'POST', body: JSON.stringify(payload) });
-    closeModal();
-    toast(`อัปเดตตั๋วเลขที่ ${res.ticket.ticket_no} เรียบร้อย`);
-    if (state.activeTab === 'pawn') loadPawnTable();
-    else if (state.activeTab === 'overdue') loadOverdueTable();
-    else if (state.activeTab === 'dashboard') loadDashboard();
-  } catch (err) {
-    toast(err.message, 'error');
-  }
+    try {
+      const res = await api(`/api/pawn/${id}/action`, { method: 'POST', body: JSON.stringify(payload) });
+      closeModal();
+      toast(`อัปเดตตั๋วเลขที่ ${res.ticket.ticket_no} เรียบร้อย`);
+      if (state.activeTab === 'pawn') loadPawnTable();
+      else if (state.activeTab === 'overdue') loadOverdueTable();
+      else if (state.activeTab === 'dashboard') loadDashboard();
+      else if (state.activeTab === 'account') loadAccountView();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
 }
 
 async function deletePawnTicketConfirm(id, ticketNo, customerName) {
@@ -3115,39 +3174,54 @@ async function openAccountEntryModal(defaultDate = getTodayIso()) {
 
 async function submitAccountEntry(e) {
   e.preventDefault();
-  try {
-    const payload = {
-      date_iso: document.getElementById('ae-date').value,
-      description: document.getElementById('ae-desc').value.trim(),
-      new_gold_g: Number(document.getElementById('ae-new-g').value || 0),
-      inc_sell: Number(document.getElementById('ae-inc-sell').value || 0),
-      inc_redeem: Number(document.getElementById('ae-inc-redeem').value || 0),
-      inc_interest: Number(document.getElementById('ae-inc-int').value || 0),
-      inc_other: Number(document.getElementById('ae-inc-other').value || 0),
-      old_gold_g: Number(document.getElementById('ae-old-g').value || 0),
-      exp_buy: Number(document.getElementById('ae-exp-buy').value || 0),
-      exp_pawn: Number(document.getElementById('ae-exp-pawn').value || 0),
-      exp_other: Number(document.getElementById('ae-exp-other').value || 0),
-      exp_transfer: Number(document.getElementById('ae-exp-transfer').value || 0),
-      exp_home: Number(document.getElementById('ae-exp-home').value || 0),
-      stock_move_type: document.getElementById('ae-stock-move').value,
-      stock_col: document.getElementById('ae-stock-col').value,
-      stock_qty: Number(document.getElementById('ae-stock-qty').value || 0),
-    };
-    await api('/api/account/entry', { method: 'POST', body: JSON.stringify(payload) });
-    closeModal();
-    toast('บันทึกรายการบัญชีเรียบร้อย');
-    if (state.activeTab === 'account') loadAccountView();
-    else if (state.activeTab === 'dashboard') loadDashboard();
-  } catch (err) {
-    toast(err.message, 'error');
-  }
+  await withSubmitLock(e.target, async () => {
+    try {
+      const payload = {
+        date_iso: document.getElementById('ae-date').value,
+        description: document.getElementById('ae-desc').value.trim(),
+        new_gold_g: Number(document.getElementById('ae-new-g').value || 0),
+        inc_sell: Number(document.getElementById('ae-inc-sell').value || 0),
+        inc_redeem: Number(document.getElementById('ae-inc-redeem').value || 0),
+        inc_interest: Number(document.getElementById('ae-inc-int').value || 0),
+        inc_other: Number(document.getElementById('ae-inc-other').value || 0),
+        old_gold_g: Number(document.getElementById('ae-old-g').value || 0),
+        exp_buy: Number(document.getElementById('ae-exp-buy').value || 0),
+        exp_pawn: Number(document.getElementById('ae-exp-pawn').value || 0),
+        exp_other: Number(document.getElementById('ae-exp-other').value || 0),
+        exp_transfer: Number(document.getElementById('ae-exp-transfer').value || 0),
+        exp_home: Number(document.getElementById('ae-exp-home').value || 0),
+        stock_move_type: document.getElementById('ae-stock-move').value,
+        stock_col: document.getElementById('ae-stock-col').value,
+        stock_qty: Number(document.getElementById('ae-stock-qty').value || 0),
+      };
+      await api('/api/account/entry', { method: 'POST', body: JSON.stringify(payload) });
+      const adjustedStock =
+        payload.stock_col &&
+        payload.stock_qty > 0 &&
+        (payload.stock_move_type === 'out' || payload.stock_move_type === 'in');
+      if (adjustedStock) {
+        state.stockCache = null;
+      }
+      closeModal();
+      toast('บันทึกรายการบัญชีเรียบร้อย');
+      if (state.activeTab === 'account') loadAccountView();
+      else if (state.activeTab === 'dashboard') loadDashboard();
+      else if (adjustedStock && state.activeTab === 'stock') loadStockView();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
 }
 
 /* ==================== STOCK MODAL ==================== */
 async function openStockModal(preselectCol = 'O') {
   if (!state.stockCache) {
-    state.stockCache = await api('/api/stock');
+    try {
+      state.stockCache = await api('/api/stock');
+    } catch (err) {
+      toast('โหลดข้อมูลสต๊อกไม่สำเร็จ: ' + err.message, 'error');
+      return;
+    }
   }
   const dateVal = document.getElementById('stock-date-picker')?.value || getTodayIso();
   const options = state.stockCache.columns
@@ -3204,30 +3278,32 @@ async function openStockModal(preselectCol = 'O') {
 
 async function submitStockModal(e) {
   e.preventDefault();
-  try {
-    const col = document.getElementById('sm-col').value;
-    const qty = Number(document.getElementById('sm-qty').value || 0);
-    const payload = {
-      date_iso: document.getElementById('sm-date').value,
-      move_type: document.getElementById('sm-type').value,
-      mode: 'add',
-      updates: { [col]: qty },
-      record_account: document.getElementById('sm-acc').checked,
-      account_desc: document.getElementById('sm-acc-desc').value,
-      account_amount: Number(document.getElementById('sm-acc-amt').value || 0),
-      transfer_amount: Number(document.getElementById('sm-acc-transfer').value || 0),
-    };
-    await api('/api/stock/movement', { method: 'POST', body: JSON.stringify(payload) });
-    closeModal();
-    toast('บันทึกความเคลื่อนไหวสต๊อกเรียบร้อย');
-    if (state.activeTab === 'stock') loadStockView();
-    else if (state.activeTab === 'dashboard') loadDashboard();
-  } catch (err) {
-    toast(err.message, 'error');
-  }
+  await withSubmitLock(e.target, async () => {
+    try {
+      const col = document.getElementById('sm-col').value;
+      const qty = Number(document.getElementById('sm-qty').value || 0);
+      const payload = {
+        date_iso: document.getElementById('sm-date').value,
+        move_type: document.getElementById('sm-type').value,
+        mode: 'add',
+        updates: { [col]: qty },
+        record_account: document.getElementById('sm-acc').checked,
+        account_desc: document.getElementById('sm-acc-desc').value,
+        account_amount: Number(document.getElementById('sm-acc-amt').value || 0),
+        transfer_amount: Number(document.getElementById('sm-acc-transfer').value || 0),
+      };
+      await api('/api/stock/movement', { method: 'POST', body: JSON.stringify(payload) });
+      state.stockCache = null;
+      closeModal();
+      toast('บันทึกความเคลื่อนไหวสต๊อกเรียบร้อย');
+      if (state.activeTab === 'stock') loadStockView();
+      else if (state.activeTab === 'dashboard') loadDashboard();
+      else if (payload.record_account && state.activeTab === 'account') loadAccountView();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
 }
-
-window.addEventListener('beforeprint', renderVatPrintPages);
 
 window.addEventListener('DOMContentLoaded', () => {
   initDateInputs();

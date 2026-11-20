@@ -1,6 +1,11 @@
 const dbMod = require('./db');
 
 const BASE_URL = 'https://xn--42cah7d0cxcvbbb9x.com';
+const CURRENT_MONTH_TTL_MS = 10 * 60 * 1000;
+const RECENT_PAGE_TTL_MS = 60 * 1000;
+const inFlightMonthFetches = new Map();
+let recentPageCache = { fetchedAt: 0, rows: null };
+
 const THAI_MONTHS_FULL = [
   'มกราคม',
   'กุมภาพันธ์',
@@ -128,88 +133,155 @@ async function fetchAndCacheMonthGoldPrices({ monthKey = '', yearBe = 0, monthNu
   const monthDiff = (nowYearCe * 12 + nowMonth) - (targetYearCe * 12 + targetMonthNum);
 
   let cached = dbMod.getGoldDailyPricesForMonth(targetYearCe, targetMonthNum);
-  if (!forceRefresh && monthDiff >= 1 && cached.daysCount >= 15) {
+  if (!forceRefresh) {
+    if (monthDiff < 0) {
+      return {
+        monthKey,
+        yearBe: targetYearBe,
+        yearCe: targetYearCe,
+        monthNum: targetMonthNum,
+        source: `${BASE_URL}/`,
+        fromCache: cached.daysCount > 0,
+        warning: '',
+        fetchedCount: 0,
+        prices: cached.prices,
+        prevFallback: cached.prevFallback,
+        daysCount: cached.daysCount,
+      };
+    }
+    if (monthDiff >= 1 && cached.daysCount >= 15) {
+      return {
+        monthKey,
+        yearBe: targetYearBe,
+        yearCe: targetYearCe,
+        monthNum: targetMonthNum,
+        source: `${BASE_URL}/`,
+        fromCache: true,
+        warning: '',
+        fetchedCount: 0,
+        prices: cached.prices,
+        prevFallback: cached.prevFallback,
+        daysCount: cached.daysCount,
+      };
+    }
+    if (monthDiff === 0 && cached.daysCount > 0) {
+      let latestUpdatedMs = 0;
+      for (const rec of Object.values(cached.prices)) {
+        const ms = Date.parse(rec.updated_at || '');
+        if (Number.isFinite(ms) && ms > latestUpdatedMs) latestUpdatedMs = ms;
+      }
+      if (latestUpdatedMs > 0 && Date.now() - latestUpdatedMs < CURRENT_MONTH_TTL_MS) {
+        return {
+          monthKey,
+          yearBe: targetYearBe,
+          yearCe: targetYearCe,
+          monthNum: targetMonthNum,
+          source: `${BASE_URL}/`,
+          fromCache: true,
+          warning: '',
+          fetchedCount: 0,
+          prices: cached.prices,
+          prevFallback: cached.prevFallback,
+          daysCount: cached.daysCount,
+        };
+      }
+    }
+  }
+
+  const flightKey = `${targetYearCe}-${targetMonthNum}-${Boolean(forceRefresh)}`;
+  const existingFlight = inFlightMonthFetches.get(flightKey);
+  if (existingFlight) {
+    const res = await existingFlight;
+    return { ...res, monthKey };
+  }
+
+  const runFetch = async () => {
+    const recentUrl = `${BASE_URL}/${encodeURI('ราคาทองย้อนหลัง')}/`;
+    const archiveUrl = buildArchiveMonthUrl(targetYearBe, targetMonthNum);
+    const candidateUrls = monthDiff <= 2 ? [recentUrl, archiveUrl] : [archiveUrl, recentUrl];
+
+    let fetchedCount = 0;
+    let networkError = null;
+    let hasTargetMonthRows = false;
+
+    for (const url of candidateUrls) {
+      try {
+        let page;
+        if (
+          !forceRefresh &&
+          url === recentUrl &&
+          recentPageCache.rows &&
+          Date.now() - recentPageCache.fetchedAt < RECENT_PAGE_TTL_MS
+        ) {
+          page = { ok: true, status: 200, rows: recentPageCache.rows };
+        } else {
+          page = await fetchPagePrices(url);
+          if (url === recentUrl && page.ok && page.rows.length > 0) {
+            recentPageCache = { fetchedAt: Date.now(), rows: page.rows };
+          }
+        }
+        if (page.ok && page.rows.length > 0) {
+          fetchedCount += dbMod.upsertGoldDailyPrices(page.rows);
+          if (page.rows.some((r) => r.date_iso.startsWith(targetYm))) {
+            hasTargetMonthRows = true;
+            break;
+          }
+        }
+      } catch (err) {
+        networkError = err;
+      }
+    }
+
+    cached = dbMod.getGoldDailyPricesForMonth(targetYearCe, targetMonthNum);
+
+    // Best-effort: fetch prior month if needed so day-1 holidays/Sundays have a fallback closing price
+    if (!cached.prevFallback && !cached.prices[`${targetYm}-01`]) {
+      const prevMonthNum = targetMonthNum === 1 ? 12 : targetMonthNum - 1;
+      const prevYearBe = targetMonthNum === 1 ? targetYearBe - 1 : targetYearBe;
+      try {
+        const prevPage = await fetchPagePrices(buildArchiveMonthUrl(prevYearBe, prevMonthNum));
+        if (prevPage.ok && prevPage.rows.length > 0) {
+          fetchedCount += dbMod.upsertGoldDailyPrices(prevPage.rows);
+          cached = dbMod.getGoldDailyPricesForMonth(targetYearCe, targetMonthNum);
+        }
+      } catch {
+        // Ignore fallback fetch errors
+      }
+    }
+
+    let warning = '';
+    let fromCache = false;
+    if (!hasTargetMonthRows && fetchedCount === 0) {
+      if (cached.daysCount > 0) {
+        fromCache = true;
+        warning = networkError
+          ? 'ไม่สามารถเชื่อมต่อ ราคาทองคำวันนี้.com ได้ ใช้ราคาที่แคชไว้แทน'
+          : 'ไม่พบข้อมูลเดือนนี้เพิ่มเติมบนเว็บ ใช้ราคาที่แคชไว้แทน';
+      } else if (networkError) {
+        throw new Error(`ไม่สามารถดึงราคาทองจาก ราคาทองคำวันนี้.com (${networkError.message || 'เชื่อมต่อไม่สำเร็จ'})`);
+      }
+    }
+
     return {
       monthKey,
       yearBe: targetYearBe,
       yearCe: targetYearCe,
       monthNum: targetMonthNum,
       source: `${BASE_URL}/`,
-      fromCache: true,
-      warning: '',
-      fetchedCount: 0,
+      fromCache,
+      warning,
+      fetchedCount,
       prices: cached.prices,
       prevFallback: cached.prevFallback,
       daysCount: cached.daysCount,
     };
-  }
-
-  const recentUrl = `${BASE_URL}/${encodeURI('ราคาทองย้อนหลัง')}/`;
-  const archiveUrl = buildArchiveMonthUrl(targetYearBe, targetMonthNum);
-  const candidateUrls = monthDiff <= 2 ? [recentUrl, archiveUrl] : [archiveUrl, recentUrl];
-
-  let fetchedCount = 0;
-  let networkError = null;
-  let hasTargetMonthRows = false;
-
-  for (const url of candidateUrls) {
-    try {
-      const page = await fetchPagePrices(url);
-      if (page.ok && page.rows.length > 0) {
-        fetchedCount += dbMod.upsertGoldDailyPrices(page.rows);
-        if (page.rows.some((r) => r.date_iso.startsWith(targetYm))) {
-          hasTargetMonthRows = true;
-          break;
-        }
-      }
-    } catch (err) {
-      networkError = err;
-    }
-  }
-
-  cached = dbMod.getGoldDailyPricesForMonth(targetYearCe, targetMonthNum);
-
-  // Best-effort: fetch prior month if needed so day-1 holidays/Sundays have a fallback closing price
-  if (!cached.prevFallback && !cached.prices[`${targetYm}-01`]) {
-    const prevMonthNum = targetMonthNum === 1 ? 12 : targetMonthNum - 1;
-    const prevYearBe = targetMonthNum === 1 ? targetYearBe - 1 : targetYearBe;
-    try {
-      const prevPage = await fetchPagePrices(buildArchiveMonthUrl(prevYearBe, prevMonthNum));
-      if (prevPage.ok && prevPage.rows.length > 0) {
-        fetchedCount += dbMod.upsertGoldDailyPrices(prevPage.rows);
-        cached = dbMod.getGoldDailyPricesForMonth(targetYearCe, targetMonthNum);
-      }
-    } catch {
-      // Ignore fallback fetch errors
-    }
-  }
-
-  let warning = '';
-  let fromCache = false;
-  if (!hasTargetMonthRows && fetchedCount === 0) {
-    if (cached.daysCount > 0) {
-      fromCache = true;
-      warning = networkError
-        ? 'ไม่สามารถเชื่อมต่อ ราคาทองคำวันนี้.com ได้ ใช้ราคาที่แคชไว้แทน'
-        : 'ไม่พบข้อมูลเดือนนี้เพิ่มเติมบนเว็บ ใช้ราคาที่แคชไว้แทน';
-    } else if (networkError) {
-      throw new Error(`ไม่สามารถดึงราคาทองจาก ราคาทองคำวันนี้.com (${networkError.message || 'เชื่อมต่อไม่สำเร็จ'})`);
-    }
-  }
-
-  return {
-    monthKey,
-    yearBe: targetYearBe,
-    yearCe: targetYearCe,
-    monthNum: targetMonthNum,
-    source: `${BASE_URL}/`,
-    fromCache,
-    warning,
-    fetchedCount,
-    prices: cached.prices,
-    prevFallback: cached.prevFallback,
-    daysCount: cached.daysCount,
   };
+
+  const flight = runFetch().finally(() => {
+    inFlightMonthFetches.delete(flightKey);
+  });
+  inFlightMonthFetches.set(flightKey, flight);
+  return flight;
 }
 
 module.exports = {

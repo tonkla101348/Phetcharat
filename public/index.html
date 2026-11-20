@@ -121,7 +121,7 @@
               <button class="pill" data-pawn-status="redeemed" onclick="setPawnStatusFilter('redeemed', this)">ไถ่แล้ว</button>
               <button class="pill" data-pawn-status="forfeited" onclick="setPawnStatusFilter('forfeited', this)">หลุดจำ</button>
             </div>
-            <select id="pawn-sheet-filter" class="select-input" onchange="loadPawnTable()">
+            <select id="pawn-sheet-filter" class="select-input" onchange="onPawnSheetFilterChange()">
               <option value="all">ทุกเล่ม (4844 + 6001)</option>
               <option value="เริ่ม 6001">เล่ม เริ่ม 6001</option>
               <option value="เริ่ม 4844">เล่ม เริ่ม 4844</option>
@@ -500,15 +500,15 @@
             </div>
             <div class="card-body">
               <div class="sheet-links-box" id="sync-sheet-links-box">
-                <a class="sheet-link-item" href="https://docs.google.com/spreadsheets/d/1_ReGE-qfsq8WYvUoFvLlssuiAVBjiTwrMAuOsdyJjbw/edit" target="_blank">
+                <a class="sheet-link-item" href="https://docs.google.com/spreadsheets/d/1_ReGE-qfsq8WYvUoFvLlssuiAVBjiTwrMAuOsdyJjbw/edit" target="_blank" rel="noopener noreferrer">
                   <strong>1. จำนำทอง เริ่ม 4818</strong>
                   <span>เปิดไฟล์ Google Sheets ↗</span>
                 </a>
-                <a class="sheet-link-item" href="https://docs.google.com/spreadsheets/d/1-D5KyzBWZ6a9mt6Ns1iwuUuYgaTidihKPmBw-BMJb8Y/edit" target="_blank">
+                <a class="sheet-link-item" href="https://docs.google.com/spreadsheets/d/1-D5KyzBWZ6a9mt6Ns1iwuUuYgaTidihKPmBw-BMJb8Y/edit" target="_blank" rel="noopener noreferrer">
                   <strong>2. รายรับรายจ่าย 2569</strong>
                   <span>เปิดไฟล์ Google Sheets ↗</span>
                 </a>
-                <a class="sheet-link-item" href="https://docs.google.com/spreadsheets/d/1-sm5_U2B7lUdARPFQJmK_-CjtwZnI3cVZpEIsQnK3I8/edit" target="_blank">
+                <a class="sheet-link-item" href="https://docs.google.com/spreadsheets/d/1-sm5_U2B7lUdARPFQJmK_-CjtwZnI3cVZpEIsQnK3I8/edit" target="_blank" rel="noopener noreferrer">
                   <strong>3. Stock ทอง เริ่ม 20/4/69</strong>
                   <span>เปิดไฟล์ Google Sheets ↗</span>
                 </a>

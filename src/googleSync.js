@@ -5,8 +5,10 @@ const { execFile } = require('child_process');
 const dbMod = require('./db');
 
 let isSyncing = false;
+let resyncPending = false;
 let cachedAccessToken = null;
 let cachedTokenExpiry = 0;
+let cachedTokenKey = '';
 
 function base64Url(input) {
   return Buffer.from(input)
@@ -21,7 +23,8 @@ function base64Url(input) {
  * using built-in node:crypto RS256 signing (zero external dependencies).
  */
 async function getServiceAccountAccessToken(saJsonStr) {
-  if (cachedAccessToken && Date.now() < cachedTokenExpiry - 60000) {
+  const saKey = typeof saJsonStr === 'string' ? saJsonStr : JSON.stringify(saJsonStr);
+  if (cachedAccessToken && cachedTokenKey === saKey && Date.now() < cachedTokenExpiry - 60000) {
     return cachedAccessToken;
   }
   const sa = typeof saJsonStr === 'string' ? JSON.parse(saJsonStr) : saJsonStr;
@@ -47,6 +50,7 @@ async function getServiceAccountAccessToken(saJsonStr) {
 
   const resp = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
+    signal: AbortSignal.timeout(30000),
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
       grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
@@ -59,6 +63,7 @@ async function getServiceAccountAccessToken(saJsonStr) {
   }
   cachedAccessToken = data.access_token;
   cachedTokenExpiry = Date.now() + (data.expires_in || 3600) * 1000;
+  cachedTokenKey = saKey;
   return cachedAccessToken;
 }
 
@@ -67,6 +72,7 @@ async function sendViaAppsScript(url, secret, item, cfg) {
   const resp = await fetch(url, {
     method: 'POST',
     redirect: 'follow',
+    signal: AbortSignal.timeout(30000),
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       secret: secret || '',
@@ -112,6 +118,7 @@ async function sendViaAppsScript(url, secret, item, cfg) {
 async function sheetsApiRequest(token, url, method = 'GET', bodyObj = null) {
   const opts = {
     method,
+    signal: AbortSignal.timeout(30000),
     headers: {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
@@ -192,7 +199,10 @@ async function sendViaSheetsApiV4(cfg, item) {
 }
 
 async function processSyncQueue() {
-  if (isSyncing) return { skipped: true };
+  if (isSyncing) {
+    resyncPending = true;
+    return { skipped: true };
+  }
   const cfg = dbMod.getSyncConfig();
   if (cfg.auto_sync_enabled === '0') {
     return { skipped: true, reason: 'auto_sync_disabled' };
@@ -207,30 +217,45 @@ async function processSyncQueue() {
   let processed = 0;
   let failed = 0;
   try {
-    const pending = dbMod.db
-      .prepare("SELECT * FROM sync_queue WHERE status IN ('pending', 'failed') ORDER BY id ASC LIMIT 50")
-      .all();
+    const attemptedIds = new Set();
+    let firstPass = true;
+    do {
+      resyncPending = false;
+      const sql = firstPass
+        ? "SELECT * FROM sync_queue WHERE status IN ('pending', 'failed') ORDER BY id ASC LIMIT 50"
+        : "SELECT * FROM sync_queue WHERE status = 'pending' ORDER BY id ASC LIMIT 50";
+      firstPass = false;
 
-    for (const item of pending) {
-      try {
-        if (hasAppsScript) {
-          await sendViaAppsScript(cfg.apps_script_url.trim(), cfg.apps_script_secret, item, cfg);
-        } else {
-          await sendViaSheetsApiV4(cfg, item);
+      const pending = dbMod.db
+        .prepare(sql)
+        .all()
+        .filter((it) => !attemptedIds.has(it.id));
+      if (pending.length === 0) break;
+
+      for (const item of pending) {
+        attemptedIds.add(item.id);
+        try {
+          if (hasAppsScript) {
+            await sendViaAppsScript(cfg.apps_script_url.trim(), cfg.apps_script_secret, item, cfg);
+          } else {
+            await sendViaSheetsApiV4(cfg, item);
+          }
+          dbMod.updateSyncQueueItem(item.id, 'synced', '');
+          processed++;
+        } catch (err) {
+          dbMod.updateSyncQueueItem(item.id, 'failed', err.message || String(err));
+          failed++;
         }
-        dbMod.updateSyncQueueItem(item.id, 'synced', '');
-        processed++;
-      } catch (err) {
-        dbMod.updateSyncQueueItem(item.id, 'failed', err.message || String(err));
-        failed++;
       }
-    }
+    } while (resyncPending);
+
     if (processed > 0) {
       dbMod.setSyncConfig({ last_push_at: new Date().toISOString() });
     }
     return { processed, failed };
   } finally {
     isSyncing = false;
+    resyncPending = false;
   }
 }
 
@@ -317,7 +342,7 @@ async function downloadSheetXlsx(fileId, outPath, cfg = {}) {
   // 1. Primary: Direct HTTP .xlsx export (works without gdrive CLI or credentials for link-shared sheets)
   try {
     const exportUrl = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(fileId)}/export?format=xlsx`;
-    const resp = await fetch(exportUrl, { redirect: 'follow' });
+    const resp = await fetch(exportUrl, { redirect: 'follow', signal: AbortSignal.timeout(30000) });
     if (resp.ok) {
       const buf = Buffer.from(await resp.arrayBuffer());
       if (isZipXlsx(buf)) {
@@ -336,6 +361,7 @@ async function downloadSheetXlsx(fileId, outPath, cfg = {}) {
       const resp = await fetch(appsScriptUrl, {
         method: 'POST',
         redirect: 'follow',
+        signal: AbortSignal.timeout(30000),
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           secret: cfg.apps_script_secret || '',
@@ -371,7 +397,7 @@ async function pullFromGoogleSheets() {
     { id: cfg.pawn_sheet_id || dbMod.SHEET_IDS.pawn, file: path.join(snapDir, 'pawn.xlsx') },
     { id: cfg.stock_sheet_id || dbMod.SHEET_IDS.stock, file: path.join(snapDir, 'stock.xlsx') },
   ];
-  const accountSheets = dbMod.getAccountSheetsByYear();
+  const accountSheets = dbMod.getAccountSheetsByYear(cfg);
   for (const [yr, sheetId] of Object.entries(accountSheets)) {
     targets.push({
       id: sheetId,
@@ -397,9 +423,21 @@ async function pullFromGoogleSheets() {
   return { ok: true, logs, seeded, pulledAt: nowIso };
 }
 
+let cachedCodeGs = { mtimeMs: -1, source: '' };
+
 function getCodeGsSource() {
   const gsPath = path.join(__dirname, '..', 'google-apps-script', 'Code.gs');
-  return fs.existsSync(gsPath) ? fs.readFileSync(gsPath, 'utf8') : '';
+  try {
+    const stat = fs.statSync(gsPath);
+    if (cachedCodeGs.mtimeMs === stat.mtimeMs) {
+      return cachedCodeGs.source;
+    }
+    const source = fs.readFileSync(gsPath, 'utf8');
+    cachedCodeGs = { mtimeMs: stat.mtimeMs, source };
+    return source;
+  } catch {
+    return '';
+  }
 }
 
 module.exports = {

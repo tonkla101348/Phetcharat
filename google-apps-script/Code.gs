@@ -152,29 +152,38 @@ function handlePawnSync(action, p) {
     targetRow = lastDataRow + 1;
   }
 
-  sheet.getRange(targetRow, 1).setValue(Number(ticketNoStr) || ticketNoStr); // A: เลขที่จำนำ
-  sheet.getRange(targetRow, 2).setValue(p.customer_name || ''); // B: ชื่อ-สกุล
-  sheet.getRange(targetRow, 3).setValue(p.item_desc || ''); // C: รายการ
-  sheet.getRange(targetRow, 4).setValue(p.item_qty || ''); // D: จำนวน
-  sheet.getRange(targetRow, 5).setValue(p.note || ''); // E: หมายเหตุ
-  sheet.getRange(targetRow, 6).setValue(Number(p.weight_g) || ''); // F: น้ำหนักรวม
-  sheet.getRange(targetRow, 7).setValue(Number(p.principal) || 0); // G: ยอดเงิน
-  sheet.getRange(targetRow, 8).setFormula('=G' + targetRow + '*2%'); // H: ดอกเบี้ย 2%
-  sheet.getRange(targetRow, 9).setValue(p.term_raw || p.term_months || 3); // I: กำหนดตัดดอก
-  if (p.pawn_date) {
-    sheet.getRange(targetRow, 10).setValue(toThaiDateShort(p.pawn_date)); // J: วันที่จำ
-  }
-  sheet.getRange(targetRow, 11).setValue(p.status || ''); // K: สถานะ
-  sheet.getRange(targetRow, 12).setValue(p.redeem_date ? toSheetDateObj(p.redeem_date) : ''); // L: วันที่ไถ่
+  var leftVals = [
+    Number(ticketNoStr) || ticketNoStr, // A: เลขที่จำนำ
+    p.customer_name || '', // B: ชื่อ-สกุล
+    p.item_desc || '', // C: รายการ
+    p.item_qty || '', // D: จำนวน
+    p.note || '', // E: หมายเหตุ
+    Number(p.weight_g) || '', // F: น้ำหนักรวม
+    Number(p.principal) || 0, // G: ยอดเงิน
+    '=G' + targetRow + '*2%', // H: ดอกเบี้ย 2%
+    p.term_raw || p.term_months || 3, // I: กำหนดตัดดอก
+  ];
 
   var paidDates = Array.isArray(p.paid_dates) ? p.paid_dates : [];
-  for (var k = 0; k < Math.max(paidDates.length, 6); k++) {
-    var colIdx = 13 + k; // M is col 13
+  var paidSlots = Math.max(paidDates.length, 6);
+  var rightVals = [
+    p.status || '', // K: สถานะ
+    p.redeem_date ? toSheetDateObj(p.redeem_date) : '', // L: วันที่ไถ่
+  ];
+  for (var k = 0; k < paidSlots; k++) {
     if (k < paidDates.length && paidDates[k]) {
-      sheet.getRange(targetRow, colIdx).setValue(toSheetDateObj(paidDates[k]));
-    } else if (colIdx <= 17) {
-      sheet.getRange(targetRow, colIdx).clearContent();
+      rightVals.push(toSheetDateObj(paidDates[k]));
+    } else {
+      rightVals.push('');
     }
+  }
+
+  if (p.pawn_date) {
+    var fullRow = leftVals.concat([toThaiDateShort(p.pawn_date)], rightVals);
+    sheet.getRange(targetRow, 1, 1, fullRow.length).setValues([fullRow]);
+  } else {
+    sheet.getRange(targetRow, 1, 1, leftVals.length).setValues([leftVals]);
+    sheet.getRange(targetRow, 11, 1, rightVals.length).setValues([rightVals]);
   }
 
   return { sheetName: sheetName, row: targetRow, ticket_no: ticketNoStr };
@@ -256,18 +265,21 @@ function handleAccountSync(action, p) {
       summaryRow += 1;
     }
 
-    sheet.getRange(insertRow, 2).setValue(p.description || '');
-    if (p.new_gold_g) sheet.getRange(insertRow, 3).setValue(Number(p.new_gold_g));
-    if (p.inc_sell) sheet.getRange(insertRow, 4).setValue(Number(p.inc_sell));
-    if (p.inc_redeem) sheet.getRange(insertRow, 5).setValue(Number(p.inc_redeem));
-    if (p.inc_interest) sheet.getRange(insertRow, 6).setValue(Number(p.inc_interest));
-    if (p.inc_other) sheet.getRange(insertRow, 7).setValue(Number(p.inc_other));
-    if (p.old_gold_g) sheet.getRange(insertRow, 8).setValue(Number(p.old_gold_g));
-    if (p.exp_buy) sheet.getRange(insertRow, 9).setValue(Number(p.exp_buy));
-    if (p.exp_pawn) sheet.getRange(insertRow, 10).setValue(Number(p.exp_pawn));
-    if (p.exp_other) sheet.getRange(insertRow, 11).setValue(Number(p.exp_other));
-    if (p.exp_transfer) sheet.getRange(insertRow, 12).setValue(Number(p.exp_transfer));
-    if (p.exp_home) sheet.getRange(insertRow, 13).setValue(Number(p.exp_home));
+    var rowVals = [
+      p.description || '',
+      p.new_gold_g ? Number(p.new_gold_g) : '',
+      p.inc_sell ? Number(p.inc_sell) : '',
+      p.inc_redeem ? Number(p.inc_redeem) : '',
+      p.inc_interest ? Number(p.inc_interest) : '',
+      p.inc_other ? Number(p.inc_other) : '',
+      p.old_gold_g ? Number(p.old_gold_g) : '',
+      p.exp_buy ? Number(p.exp_buy) : '',
+      p.exp_pawn ? Number(p.exp_pawn) : '',
+      p.exp_other ? Number(p.exp_other) : '',
+      p.exp_transfer ? Number(p.exp_transfer) : '',
+      p.exp_home ? Number(p.exp_home) : '',
+    ];
+    sheet.getRange(insertRow, 2, 1, 12).setValues([rowVals]);
 
     return { monthKey: monthKey, insertedRow: insertRow, summaryRow: summaryRow };
   }
@@ -309,25 +321,26 @@ function findDayBlockStartRow(sheet, summaryRow) {
 
 function createNewAccountDayBlock(sheet, dateIso) {
   var lastRow = sheet.getLastRow();
-  var bVals = lastRow >= 4 ? sheet.getRange(1, 2, lastRow, 1).getValues() : [];
+  var aoVals = lastRow >= 4 ? sheet.getRange(4, 1, lastRow - 3, 15).getValues() : [];
   var prevAccRow = 3;
-  var prevSummaryRow = 3;
   var lastUsedSummaryRow = 3;
+  var blockStartRow = 4;
 
   // Find last active day block, or an empty pre-allocated block without date
-  for (var r = 4; r <= lastRow; r++) {
-    var b = String(bVals[r - 1][0] || '').trim();
+  for (var i = 0; i < aoVals.length; i++) {
+    var r = i + 4;
+    var b = String(aoVals[i][1] || '').trim();
     if (b === 'สรุปวัน') {
-      var aCell = sheet.getRange(findDayBlockStartRow(sheet, r), 1).getValue();
-      var hasEntries = Number(sheet.getRange(r, 4).getValue() || 0) !== 0 || sheet.getRange(r, 15).getValue() !== '';
+      var aCell = aoVals[blockStartRow - 4] ? aoVals[blockStartRow - 4][0] : '';
+      var hasEntries = Number(aoVals[i][3] || 0) !== 0 || aoVals[i][14] !== '';
       if (!aCell && !hasEntries) {
-        var blockStart = findDayBlockStartRow(sheet, r);
-        sheet.getRange(blockStart, 1).setValue(toSheetDateObj(dateIso));
+        sheet.getRange(blockStartRow, 1).setValue(toSheetDateObj(dateIso));
         return r;
       }
       lastUsedSummaryRow = r;
     } else if (b === 'สะสม') {
       prevAccRow = r;
+      blockStartRow = r + 1;
     }
   }
 
@@ -339,9 +352,7 @@ function createNewAccountDayBlock(sheet, dateIso) {
   var accRow = totalRow + 1;
 
   sheet.getRange(startRow, 1).setValue(toSheetDateObj(dateIso));
-  sheet.getRange(sumRow, 2).setValue('สรุปวัน');
-  sheet.getRange(totalRow, 2).setValue('รวม');
-  sheet.getRange(accRow, 2).setValue('สะสม');
+  sheet.getRange(sumRow, 2, 3, 1).setValues([['สรุปวัน'], ['รวม'], ['สะสม']]);
 
   var cols = ['D', 'E', 'F', 'G', 'I', 'J', 'K', 'L', 'M'];
   cols.forEach(function (col) {
@@ -407,32 +418,47 @@ function handleStockSync(action, p) {
     } else {
       baseRow = Math.max(4, lastRow + 1);
       sheet.getRange(baseRow, 1).setValue(toSheetDateObj(dateIso));
-      sheet.getRange(baseRow, 2).setValue('รับใหม่');
-      sheet.getRange(baseRow + 1, 2).setValue('ขาย');
-      sheet.getRange(baseRow + 2, 2).setValue('ชำรุด');
-      sheet.getRange(baseRow + 3, 2).setValue('คงเหลือ (ชิ้น)');
-      sheet.getRange(baseRow + 4, 2).setValue('น้ำหนักรวม');
+      sheet.getRange(baseRow, 2, 5, 1).setValues([
+        ['รับใหม่'],
+        ['ขาย'],
+        ['ชำรุด'],
+        ['คงเหลือ (ชิ้น)'],
+        ['น้ำหนักรวม'],
+      ]);
     }
   }
 
   var rowOffset = moveType === 'in' ? 0 : moveType === 'out' ? 1 : 2;
   var targetRow = baseRow + rowOffset;
 
+  var entries = [];
+  var minCol = 51;
+  var maxCol = 0;
   Object.keys(updates).forEach(function (colKey) {
     if (colKey === '__mode') return;
     var colIdx = colLetterToIndex(colKey);
     if (colIdx < 3 || colIdx > 50) return;
-    var val = Number(updates[colKey]) || 0;
-    var cell = sheet.getRange(targetRow, colIdx);
-    if (mode === 'add') {
-      var prev = Number(cell.getValue()) || 0;
-      cell.setValue(prev + val);
-    } else if (val === 0) {
-      cell.clearContent();
-    } else {
-      cell.setValue(val);
-    }
+    entries.push({ colIdx: colIdx, val: Number(updates[colKey]) || 0 });
+    if (colIdx < minCol) minCol = colIdx;
+    if (colIdx > maxCol) maxCol = colIdx;
   });
+
+  if (entries.length > 0) {
+    var width = maxCol - minCol + 1;
+    var rowSlice = sheet.getRange(targetRow, minCol, 1, width).getValues()[0];
+    entries.forEach(function (ent) {
+      var offset = ent.colIdx - minCol;
+      if (mode === 'add') {
+        var prev = Number(rowSlice[offset]) || 0;
+        rowSlice[offset] = prev + ent.val;
+      } else if (ent.val === 0) {
+        rowSlice[offset] = '';
+      } else {
+        rowSlice[offset] = ent.val;
+      }
+    });
+    sheet.getRange(targetRow, minCol, 1, width).setValues([rowSlice]);
+  }
 
   return { baseRow: baseRow, targetRow: targetRow, dateIso: dateIso, moveType: moveType };
 }

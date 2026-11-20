@@ -12,14 +12,35 @@ const {
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const SNAPSHOTS_DIR = path.join(DATA_DIR, 'snapshots');
-const DB_PATH = path.join(DATA_DIR, 'petcharat.db');
+const DB_PATH = process.env.PETCHARAT_DB_PATH || path.join(DATA_DIR, 'petcharat.db');
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(SNAPSHOTS_DIR, { recursive: true });
+if (DB_PATH !== ':memory:') {
+  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+}
 
 const db = new DatabaseSync(DB_PATH);
 db.exec('PRAGMA journal_mode = WAL;');
 db.exec('PRAGMA foreign_keys = ON;');
+db.exec('PRAGMA synchronous = NORMAL;');
+db.exec('PRAGMA busy_timeout = 5000;');
+db.exec('PRAGMA cache_size = -16000;');
+db.exec('PRAGMA temp_store = MEMORY;');
+
+const stmtCache = new Map();
+function stmt(sql) {
+  let s = stmtCache.get(sql);
+  if (!s) {
+    s = db.prepare(sql);
+    stmtCache.set(sql, s);
+  }
+  return s;
+}
+
+let schemaInitialized = false;
+let pawnMutationVersion = 0;
+let pawnCache = null;
 
 const SHEET_IDS = {
   pawn: '1_ReGE-qfsq8WYvUoFvLlssuiAVBjiTwrMAuOsdyJjbw',
@@ -153,6 +174,7 @@ function getBeYearForMonthOrder(monthOrder) {
 }
 
 function initSchema() {
+  if (schemaInitialized) return;
   db.exec(`
     CREATE TABLE IF NOT EXISTS pawn_tickets (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -195,6 +217,7 @@ function initSchema() {
       carry_exp_transfer REAL DEFAULT 0,
       carry_exp_home REAL DEFAULT 0
     );
+    CREATE INDEX IF NOT EXISTS idx_acc_months_order ON account_months(month_order);
 
     CREATE TABLE IF NOT EXISTS account_days (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -228,6 +251,7 @@ function initSchema() {
       created_at TEXT DEFAULT ''
     );
     CREATE INDEX IF NOT EXISTS idx_acc_entries_date ON account_entries(month_key, date_iso, id);
+    CREATE INDEX IF NOT EXISTS idx_acc_entries_linked_ticket ON account_entries(linked_ticket_no);
 
     CREATE TABLE IF NOT EXISTS stock_opening (
       col_key TEXT PRIMARY KEY,
@@ -260,6 +284,7 @@ function initSchema() {
       created_at TEXT NOT NULL,
       synced_at TEXT DEFAULT ''
     );
+    CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status, id);
 
     CREATE TABLE IF NOT EXISTS vat_sales_rows (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -342,13 +367,14 @@ function initSchema() {
     last_pull_at: '',
     last_push_at: '',
   };
-  const insCfg = db.prepare('INSERT OR IGNORE INTO sync_config (key, value) VALUES (?, ?)');
+  const insCfg = stmt('INSERT OR IGNORE INTO sync_config (key, value) VALUES (?, ?)');
   for (const [k, v] of Object.entries(defaults)) {
     insCfg.run(k, v);
   }
   removeSeededDefaultNov69VatRowsOnce();
   migrateVatPricesToOrnamentOnce();
-  db.prepare("DELETE FROM sync_queue WHERE action = 'syncSalesTaxReport' AND status IN ('pending', 'failed')").run();
+  stmt("DELETE FROM sync_queue WHERE action = 'syncSalesTaxReport' AND status IN ('pending', 'failed')").run();
+  schemaInitialized = true;
 }
 
 function numVal(cell) {
@@ -737,6 +763,7 @@ function reseedFromSnapshots() {
 
     const stockCount = fs.existsSync(stockFile) ? seedStockFromXlsx(stockFile) : 0;
     db.exec('COMMIT');
+    pawnMutationVersion++;
     return { pawnCount, accountCount, stockCount };
   } catch (err) {
     db.exec('ROLLBACK');
@@ -746,18 +773,34 @@ function reseedFromSnapshots() {
 
 function seedFromSnapshotsIfEmpty() {
   initSchema();
-  const pawnCount = db.prepare('SELECT COUNT(*) AS cnt FROM pawn_tickets').get().cnt;
-  const accCount = db.prepare('SELECT COUNT(*) AS cnt FROM account_months').get().cnt;
-  const stockCount = db.prepare('SELECT COUNT(*) AS cnt FROM stock_opening').get().cnt;
+  const pawnCount = stmt('SELECT COUNT(*) AS cnt FROM pawn_tickets').get().cnt;
+  const accCount = stmt('SELECT COUNT(*) AS cnt FROM account_months').get().cnt;
+  const stockCount = stmt('SELECT COUNT(*) AS cnt FROM stock_opening').get().cnt;
   if (pawnCount === 0 && accCount === 0 && stockCount === 0) {
     return reseedFromSnapshots();
   }
   return { skipped: true, pawnCount, accCount, stockCount };
 }
 
+function parseIsoParts(iso) {
+  if (!iso) return null;
+  if (iso.length === 10 && iso[4] === '-' && iso[7] === '-') {
+    return [Number(iso.slice(0, 4)), Number(iso.slice(5, 7)), Number(iso.slice(8, 10))];
+  }
+  const parts = String(iso).split('-').map(Number);
+  return parts.length >= 3 ? parts : null;
+}
+
+function isoToUtcMs(iso) {
+  const parts = parseIsoParts(iso);
+  if (!parts) return NaN;
+  return Date.UTC(parts[0], parts[1] - 1, parts[2]);
+}
+
 function addMonthsIso(isoDate, months) {
-  if (!isoDate) return '';
-  const [y, m, d] = isoDate.split('-').map(Number);
+  const parts = parseIsoParts(isoDate);
+  if (!parts) return '';
+  const [y, m, d] = parts;
   // Match Excel EDATE(date, months)
   const targetMonthIndex = (m - 1) + months;
   const targetYear = y + Math.floor(targetMonthIndex / 12);
@@ -769,14 +812,13 @@ function addMonthsIso(isoDate, months) {
 
 function diffDaysIso(laterIso, earlierIso) {
   if (!laterIso || !earlierIso) return 0;
-  const [y1, m1, d1] = laterIso.split('-').map(Number);
-  const [y2, m2, d2] = earlierIso.split('-').map(Number);
-  const t1 = Date.UTC(y1, m1 - 1, d1);
-  const t2 = Date.UTC(y2, m2 - 1, d2);
+  const t1 = isoToUtcMs(laterIso);
+  const t2 = isoToUtcMs(earlierIso);
+  if (!Number.isFinite(t1) || !Number.isFinite(t2)) return 0;
   return Math.floor((t1 - t2) / 86400000);
 }
 
-function enrichPawnTicket(row, refTodayIso) {
+function enrichPawnTicket(row, refTodayIso, refTodayUtcMs) {
   let paidDates = [];
   try {
     paidDates = JSON.parse(row.paid_dates_json || '[]').filter(Boolean).sort();
@@ -796,7 +838,12 @@ function enrichPawnTicket(row, refTodayIso) {
   const isForfeited = st.includes('หลุด');
   const isActive = row.principal > 0 && !isBadCard && !isRedeemed && !isForfeited;
 
-  const overdueDays = isActive && dueDate ? diffDaysIso(refTodayIso, dueDate) : 0;
+  let overdueDays = 0;
+  if (isActive && dueDate) {
+    const todayMs = Number.isFinite(refTodayUtcMs) ? refTodayUtcMs : isoToUtcMs(refTodayIso);
+    const dueMs = isoToUtcMs(dueDate);
+    overdueDays = Number.isFinite(todayMs) && Number.isFinite(dueMs) ? Math.floor((todayMs - dueMs) / 86400000) : 0;
+  }
   const isOverdue = isActive && overdueDays > 0;
 
   let computedStatus = 'จำนำอยู่';
@@ -830,13 +877,25 @@ function enrichPawnTicket(row, refTodayIso) {
   };
 }
 
-function getPawnTicketsWithOverdue(filters = {}, refTodayIso = getTodayIsoBangkok()) {
-  const rows = db.prepare('SELECT * FROM pawn_tickets ORDER BY id DESC').all();
-  const enriched = rows.map((r) => enrichPawnTicket(r, refTodayIso));
+function getPawnCache(refTodayIso) {
+  const dataVersion = stmt('PRAGMA data_version').get()?.data_version ?? 0;
+  if (
+    pawnCache &&
+    pawnCache.refTodayIso === refTodayIso &&
+    pawnCache.dataVersion === dataVersion &&
+    pawnCache.mutationVersion === pawnMutationVersion
+  ) {
+    return pawnCache;
+  }
+
+  const refTodayUtcMs = isoToUtcMs(refTodayIso);
+  const rows = stmt('SELECT * FROM pawn_tickets ORDER BY id DESC').all();
+  const enriched = new Array(rows.length);
+  const haystacks = new Array(rows.length);
 
   // Global KPIs across all tickets
   const summary = {
-    totalCount: enriched.length,
+    totalCount: rows.length,
     activeCount: 0,
     activePrincipal: 0,
     activeWeightG: 0,
@@ -849,7 +908,11 @@ function getPawnTicketsWithOverdue(filters = {}, refTodayIso = getTodayIsoBangko
     refTodayIso,
   };
 
-  for (const t of enriched) {
+  for (let i = 0; i < rows.length; i++) {
+    const t = enrichPawnTicket(rows[i], refTodayIso, refTodayUtcMs);
+    enriched[i] = t;
+    haystacks[i] = `${t.ticket_no} ${t.customer_name} ${t.item_desc} ${t.note}`.toLowerCase();
+
     if (t.is_active) {
       summary.activeCount++;
       summary.activePrincipal += t.principal;
@@ -870,25 +933,38 @@ function getPawnTicketsWithOverdue(filters = {}, refTodayIso = getTodayIsoBangko
   summary.activeMonthlyInterest = round2(summary.activeMonthlyInterest);
   summary.overdueMonthlyInterest = round2(summary.overdueMonthlyInterest);
 
+  pawnCache = {
+    refTodayIso,
+    dataVersion,
+    mutationVersion: pawnMutationVersion,
+    enriched,
+    haystacks,
+    summary,
+  };
+  return pawnCache;
+}
+
+function getPawnTicketsWithOverdue(filters = {}, refTodayIso = getTodayIsoBangkok()) {
+  const { enriched, haystacks, summary } = getPawnCache(refTodayIso);
+
   const search = String(filters.search || '').trim().toLowerCase();
   const statusFilter = filters.status || 'all';
   const sheetFilter = filters.sheet || 'all';
   const overdueOnly = Boolean(filters.overdueOnly);
 
-  let filtered = enriched.filter((t) => {
-    if (sheetFilter !== 'all' && t.sheet_name !== sheetFilter) return false;
-    if (overdueOnly && !t.is_overdue) return false;
-    if (statusFilter === 'active' && !t.is_active) return false;
-    if (statusFilter === 'overdue' && !t.is_overdue) return false;
-    if (statusFilter === 'redeemed' && t.status_category !== 'redeemed') return false;
-    if (statusFilter === 'forfeited' && t.status_category !== 'forfeited') return false;
-    if (statusFilter === 'ontime' && (!t.is_active || t.is_overdue)) return false;
-    if (search) {
-      const hay = `${t.ticket_no} ${t.customer_name} ${t.item_desc} ${t.note}`.toLowerCase();
-      if (!hay.includes(search)) return false;
-    }
-    return true;
-  });
+  const filtered = [];
+  for (let i = 0; i < enriched.length; i++) {
+    const t = enriched[i];
+    if (sheetFilter !== 'all' && t.sheet_name !== sheetFilter) continue;
+    if (overdueOnly && !t.is_overdue) continue;
+    if (statusFilter === 'active' && !t.is_active) continue;
+    if (statusFilter === 'overdue' && !t.is_overdue) continue;
+    if (statusFilter === 'redeemed' && t.status_category !== 'redeemed') continue;
+    if (statusFilter === 'forfeited' && t.status_category !== 'forfeited') continue;
+    if (statusFilter === 'ontime' && (!t.is_active || t.is_overdue)) continue;
+    if (search && !haystacks[i].includes(search)) continue;
+    filtered.push(t);
+  }
 
   if (overdueOnly || statusFilter === 'overdue') {
     filtered.sort((a, b) => b.overdue_days - a.overdue_days);
@@ -906,18 +982,16 @@ function getPawnTicketsWithOverdue(filters = {}, refTodayIso = getTodayIsoBangko
 }
 
 function getNextTicketNo() {
-  const row = db
-    .prepare(
-      `SELECT MAX(CAST(ticket_no AS INTEGER)) AS max_no
-       FROM pawn_tickets
-       WHERE ticket_no GLOB '[0-9]*' AND CAST(ticket_no AS INTEGER) < 10000`
-    )
-    .get();
+  const row = stmt(
+    `SELECT MAX(CAST(ticket_no AS INTEGER)) AS max_no
+     FROM pawn_tickets
+     WHERE ticket_no != '' AND ticket_no NOT GLOB '*[^0-9]*' AND CAST(ticket_no AS INTEGER) < 10000`
+  ).get();
   return String((row?.max_no || 6325) + 1);
 }
 
 function ensureAccountMonthExists(monthKey, dateIso) {
-  const existing = db.prepare('SELECT * FROM account_months WHERE month_key = ?').get(monthKey);
+  const existing = stmt('SELECT * FROM account_months WHERE month_key = ?').get(monthKey);
   if (existing) return existing;
 
   // Carry forward ending cash and cumulative pawn from the immediately preceding month
@@ -928,10 +1002,13 @@ function ensureAccountMonthExists(monthKey, dateIso) {
   const carryCash = prev ? prev.endingCash : 0;
   const carryPawn = prev ? prev.endingPawn : 0;
 
-  db.prepare(
-    `INSERT INTO account_months (month_key, month_order, carry_cash, carry_pawn) VALUES (?, ?, ?, ?)`
-  ).run(monthKey, order, carryCash, carryPawn);
-  return db.prepare('SELECT * FROM account_months WHERE month_key = ?').get(monthKey);
+  stmt(`INSERT INTO account_months (month_key, month_order, carry_cash, carry_pawn) VALUES (?, ?, ?, ?)`).run(
+    monthKey,
+    order,
+    carryCash,
+    carryPawn
+  );
+  return stmt('SELECT * FROM account_months WHERE month_key = ?').get(monthKey);
 }
 
 function insertAccountEntryInternal(input) {
@@ -939,55 +1016,43 @@ function insertAccountEntryInternal(input) {
   const monthKey = input.month_key || getMonthKeyForIsoDate(dateIso);
   ensureAccountMonthExists(monthKey, dateIso);
 
-  const dayRow = db.prepare('SELECT id FROM account_days WHERE month_key = ? AND date_iso = ?').get(monthKey, dateIso);
-  if (!dayRow) {
-    db.prepare('INSERT INTO account_days (month_key, date_iso, actual_cash, note) VALUES (?, ?, NULL, ?)').run(
-      monthKey,
-      dateIso,
-      ''
-    );
-  }
+  stmt('INSERT OR IGNORE INTO account_days (month_key, date_iso, actual_cash, note) VALUES (?, ?, NULL, ?)').run(
+    monthKey,
+    dateIso,
+    ''
+  );
 
   const nowIso = new Date().toISOString();
-  const res = db
-    .prepare(
-      `INSERT INTO account_entries (
-        month_key, date_iso, sheet_row, description,
-        new_gold_g, inc_sell, inc_redeem, inc_interest, inc_other,
-        old_gold_g, exp_buy, exp_pawn, exp_other, exp_transfer, exp_home,
-        linked_ticket_no, created_at
-      ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      monthKey,
-      dateIso,
-      String(input.description || '').trim(),
-      round2(Number(input.new_gold_g) || 0),
-      round2(Number(input.inc_sell) || 0),
-      round2(Number(input.inc_redeem) || 0),
-      round2(Number(input.inc_interest) || 0),
-      round2(Number(input.inc_other) || 0),
-      round2(Number(input.old_gold_g) || 0),
-      round2(Number(input.exp_buy) || 0),
-      round2(Number(input.exp_pawn) || 0),
-      round2(Number(input.exp_other) || 0),
-      round2(Number(input.exp_transfer) || 0),
-      round2(Number(input.exp_home) || 0),
-      String(input.linked_ticket_no || ''),
-      nowIso
-    );
+  const res = stmt(
+    `INSERT INTO account_entries (
+      month_key, date_iso, sheet_row, description,
+      new_gold_g, inc_sell, inc_redeem, inc_interest, inc_other,
+      old_gold_g, exp_buy, exp_pawn, exp_other, exp_transfer, exp_home,
+      linked_ticket_no, created_at
+    ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    monthKey,
+    dateIso,
+    String(input.description || '').trim(),
+    round2(Number(input.new_gold_g) || 0),
+    round2(Number(input.inc_sell) || 0),
+    round2(Number(input.inc_redeem) || 0),
+    round2(Number(input.inc_interest) || 0),
+    round2(Number(input.inc_other) || 0),
+    round2(Number(input.old_gold_g) || 0),
+    round2(Number(input.exp_buy) || 0),
+    round2(Number(input.exp_pawn) || 0),
+    round2(Number(input.exp_other) || 0),
+    round2(Number(input.exp_transfer) || 0),
+    round2(Number(input.exp_home) || 0),
+    String(input.linked_ticket_no || ''),
+    nowIso
+  );
 
-  return db.prepare('SELECT * FROM account_entries WHERE id = ?').get(res.lastInsertRowid);
+  return stmt('SELECT * FROM account_entries WHERE id = ?').get(res.lastInsertRowid);
 }
 
 function createPawnTicket(input) {
-  const ticketNo = String(input.ticket_no || getNextTicketNo()).trim();
-  const sheetName = input.sheet_name || (Number(ticketNo) >= 6001 ? 'เริ่ม 6001' : 'เริ่ม 4844');
-  const maxRowObj = db
-    .prepare('SELECT COALESCE(MAX(sheet_row), 1) AS max_row FROM pawn_tickets WHERE sheet_name = ?')
-    .get(sheetName);
-  const nextSheetRow = (maxRowObj?.max_row || 1) + 1;
-
   const principal = round2(Number(input.principal) || 0);
   const interestAmt = round2(Number(input.interest_amount) || principal * 0.02);
   const weightG = round2(Number(input.weight_g) || 0);
@@ -999,33 +1064,38 @@ function createPawnTicket(input) {
   let createdAccountEntry = null;
   db.exec('BEGIN');
   try {
-    const res = db
-      .prepare(
-        `INSERT INTO pawn_tickets (
-          ticket_no, sheet_name, sheet_row, customer_name, item_desc, item_qty, note,
-          weight_g, principal, interest_rate, interest_amount, term_months, term_raw,
-          pawn_date, status, redeem_date, paid_dates_json, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '[]', ?)`
-      )
-      .run(
-        ticketNo,
-        sheetName,
-        nextSheetRow,
-        String(input.customer_name || '').trim(),
-        String(input.item_desc || '').trim(),
-        String(input.item_qty || '').trim(),
-        String(input.note || '').trim(),
-        weightG,
-        principal,
-        0.02,
-        interestAmt,
-        termMonths,
-        termRaw,
-        pawnDate,
-        nowIso
-      );
+    const ticketNo = String(input.ticket_no || getNextTicketNo()).trim();
+    const sheetName = input.sheet_name || (Number(ticketNo) >= 6001 ? 'เริ่ม 6001' : 'เริ่ม 4844');
+    const maxRowObj = stmt('SELECT COALESCE(MAX(sheet_row), 1) AS max_row FROM pawn_tickets WHERE sheet_name = ?').get(
+      sheetName
+    );
+    const nextSheetRow = (maxRowObj?.max_row || 1) + 1;
 
-    const ticket = db.prepare('SELECT * FROM pawn_tickets WHERE id = ?').get(res.lastInsertRowid);
+    const res = stmt(
+      `INSERT INTO pawn_tickets (
+        ticket_no, sheet_name, sheet_row, customer_name, item_desc, item_qty, note,
+        weight_g, principal, interest_rate, interest_amount, term_months, term_raw,
+        pawn_date, status, redeem_date, paid_dates_json, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '[]', ?)`
+    ).run(
+      ticketNo,
+      sheetName,
+      nextSheetRow,
+      String(input.customer_name || '').trim(),
+      String(input.item_desc || '').trim(),
+      String(input.item_qty || '').trim(),
+      String(input.note || '').trim(),
+      weightG,
+      principal,
+      0.02,
+      interestAmt,
+      termMonths,
+      termRaw,
+      pawnDate,
+      nowIso
+    );
+
+    const ticket = stmt('SELECT * FROM pawn_tickets WHERE id = ?').get(res.lastInsertRowid);
 
     if (input.record_account !== false && principal > 0) {
       createdAccountEntry = insertAccountEntryInternal({
@@ -1038,6 +1108,7 @@ function createPawnTicket(input) {
     }
 
     db.exec('COMMIT');
+    pawnMutationVersion++;
     return {
       ticket: enrichPawnTicket(ticket, getTodayIsoBangkok()),
       accountEntry: createdAccountEntry,
@@ -1051,12 +1122,10 @@ function createPawnTicket(input) {
 function performPawnAction(idOrTicketNo, input) {
   let row = null;
   if (Number.isFinite(Number(idOrTicketNo)) && Number(idOrTicketNo) > 0) {
-    row = db.prepare('SELECT * FROM pawn_tickets WHERE id = ?').get(Number(idOrTicketNo));
+    row = stmt('SELECT * FROM pawn_tickets WHERE id = ?').get(Number(idOrTicketNo));
   }
   if (!row) {
-    row = db
-      .prepare('SELECT * FROM pawn_tickets WHERE ticket_no = ? ORDER BY id DESC LIMIT 1')
-      .get(String(idOrTicketNo));
+    row = stmt('SELECT * FROM pawn_tickets WHERE ticket_no = ? ORDER BY id DESC LIMIT 1').get(String(idOrTicketNo));
   }
   if (!row) {
     throw new Error(`ไม่พบเลขที่จำนำ ${idOrTicketNo}`);
@@ -1143,10 +1212,15 @@ function performPawnAction(idOrTicketNo, input) {
     const updatedNote = input.note !== undefined ? String(input.note).trim() : row.note;
     const updatedWeight = input.weight_g !== undefined ? round2(Number(input.weight_g) || 0) : row.weight_g;
     const updatedTerm = input.term_months !== undefined ? parseTermMonths(input.term_months) : row.term_months;
-    const updatedTermRaw = input.term_raw !== undefined ? String(input.term_raw) : (input.term_months !== undefined ? String(updatedTerm) : row.term_raw);
+    const updatedTermRaw =
+      input.term_raw !== undefined
+        ? String(input.term_raw)
+        : input.term_months !== undefined
+        ? String(updatedTerm)
+        : row.term_raw;
     const updatedPawnDate = input.pawn_date !== undefined ? normalizeSheetDate(input.pawn_date) : row.pawn_date;
 
-    db.prepare(
+    stmt(
       `UPDATE pawn_tickets
        SET customer_name = ?, item_desc = ?, item_qty = ?, note = ?, weight_g = ?,
            principal = ?, interest_amount = ?, term_months = ?, term_raw = ?,
@@ -1190,7 +1264,8 @@ function performPawnAction(idOrTicketNo, input) {
     }
 
     db.exec('COMMIT');
-    const updatedRow = db.prepare('SELECT * FROM pawn_tickets WHERE id = ?').get(row.id);
+    pawnMutationVersion++;
+    const updatedRow = stmt('SELECT * FROM pawn_tickets WHERE id = ?').get(row.id);
     return {
       ticket: enrichPawnTicket(updatedRow, getTodayIsoBangkok()),
       accountEntry: createdAccountEntry,
@@ -1203,8 +1278,8 @@ function performPawnAction(idOrTicketNo, input) {
 
 function deletePawnTicket(idOrTicket, options = {}) {
   const row =
-    db.prepare('SELECT * FROM pawn_tickets WHERE id = ?').get(Number(idOrTicket) || -1) ||
-    db.prepare('SELECT * FROM pawn_tickets WHERE ticket_no = ? ORDER BY id DESC LIMIT 1').get(String(idOrTicket));
+    stmt('SELECT * FROM pawn_tickets WHERE id = ?').get(Number(idOrTicket) || -1) ||
+    stmt('SELECT * FROM pawn_tickets WHERE ticket_no = ? ORDER BY id DESC LIMIT 1').get(String(idOrTicket));
   if (!row) {
     throw new Error(`ไม่พบรายการจำนำ: ${idOrTicket}`);
   }
@@ -1212,13 +1287,14 @@ function deletePawnTicket(idOrTicket, options = {}) {
   try {
     const deletedAccountEntries =
       options.delete_linked_account !== false && row.ticket_no
-        ? db.prepare('SELECT * FROM account_entries WHERE linked_ticket_no = ?').all(String(row.ticket_no))
+        ? stmt('SELECT * FROM account_entries WHERE linked_ticket_no = ?').all(String(row.ticket_no))
         : [];
-    db.prepare('DELETE FROM pawn_tickets WHERE id = ?').run(row.id);
+    stmt('DELETE FROM pawn_tickets WHERE id = ?').run(row.id);
     if (options.delete_linked_account !== false && row.ticket_no) {
-      db.prepare('DELETE FROM account_entries WHERE linked_ticket_no = ?').run(String(row.ticket_no));
+      stmt('DELETE FROM account_entries WHERE linked_ticket_no = ?').run(String(row.ticket_no));
     }
     db.exec('COMMIT');
+    pawnMutationVersion++;
     return { deleted: row, deletedAccountEntries };
   } catch (err) {
     db.exec('ROLLBACK');
@@ -1227,12 +1303,10 @@ function deletePawnTicket(idOrTicket, options = {}) {
 }
 
 function computeMonthData(monthRow) {
-  const days = db
-    .prepare('SELECT * FROM account_days WHERE month_key = ? ORDER BY COALESCE(summary_row, 999999) ASC, date_iso ASC')
-    .all(monthRow.month_key);
-  const entries = db
-    .prepare('SELECT * FROM account_entries WHERE month_key = ? ORDER BY id ASC')
-    .all(monthRow.month_key);
+  const days = stmt(
+    'SELECT * FROM account_days WHERE month_key = ? ORDER BY COALESCE(summary_row, 999999) ASC, date_iso ASC'
+  ).all(monthRow.month_key);
+  const entries = stmt('SELECT * FROM account_entries WHERE month_key = ? ORDER BY id ASC').all(monthRow.month_key);
 
   const entriesByDate = new Map();
   for (const e of entries) {
@@ -1377,20 +1451,138 @@ function computeMonthData(monthRow) {
 }
 
 function getAccountMonthsSummaryList() {
-  const months = db.prepare('SELECT * FROM account_months ORDER BY month_order ASC').all();
+  const months = stmt('SELECT * FROM account_months ORDER BY month_order ASC').all();
+  const allDays = stmt(
+    'SELECT month_key, date_iso, actual_cash, summary_row FROM account_days ORDER BY month_key ASC, COALESCE(summary_row, 999999) ASC, date_iso ASC'
+  ).all();
+  const entrySums = stmt(
+    `SELECT month_key, date_iso,
+       COALESCE(SUM(new_gold_g), 0) AS new_gold_g,
+       COALESCE(SUM(inc_sell), 0) AS inc_sell,
+       COALESCE(SUM(inc_redeem), 0) AS inc_redeem,
+       COALESCE(SUM(inc_interest), 0) AS inc_interest,
+       COALESCE(SUM(inc_other), 0) AS inc_other,
+       COALESCE(SUM(old_gold_g), 0) AS old_gold_g,
+       COALESCE(SUM(exp_buy), 0) AS exp_buy,
+       COALESCE(SUM(exp_pawn), 0) AS exp_pawn,
+       COALESCE(SUM(exp_other), 0) AS exp_other,
+       COALESCE(SUM(exp_transfer), 0) AS exp_transfer,
+       COALESCE(SUM(exp_home), 0) AS exp_home
+     FROM account_entries
+     GROUP BY month_key, date_iso`
+  ).all();
+
+  const daysByMonth = new Map();
+  for (const d of allDays) {
+    let list = daysByMonth.get(d.month_key);
+    if (!list) {
+      list = [];
+      daysByMonth.set(d.month_key, list);
+    }
+    list.push(d);
+  }
+
+  const sumsByMonthDate = new Map();
+  for (const s of entrySums) {
+    sumsByMonthDate.set(`${s.month_key}\0${s.date_iso}`, s);
+  }
+
   return months.map((m) => {
-    const computed = computeMonthData(m);
+    const days = daysByMonth.get(m.month_key) || [];
+    let runningCash = m.carry_cash;
+    let runningPawn = m.carry_pawn;
+
+    let cumNewGoldG = m.carry_new_gold_g || 0;
+    let cumOldGoldG = m.carry_old_gold_g || 0;
+    let cumIncSell = m.carry_inc_sell || 0;
+    let cumIncRedeem = m.carry_inc_redeem || 0;
+    let cumIncInterest = m.carry_inc_interest || 0;
+    let cumIncOther = m.carry_inc_other || 0;
+    let cumExpBuy = m.carry_exp_buy || 0;
+    let cumExpPawn = m.carry_exp_pawn || 0;
+    let cumExpOther = m.carry_exp_other || 0;
+    let cumExpTransfer = m.carry_exp_transfer || 0;
+    let cumExpHome = m.carry_exp_home || 0;
+
+    let lastActualCash = m.carry_cash;
+    let lastExpectedCash = m.carry_cash;
+    let lastDayActualCash = null;
+
+    for (const d of days) {
+      const ds = sumsByMonthDate.get(`${m.month_key}\0${d.date_iso}`);
+      const sNewGoldG = ds ? round2(ds.new_gold_g) : 0;
+      const sIncSell = ds ? round2(ds.inc_sell) : 0;
+      const sIncRedeem = ds ? round2(ds.inc_redeem) : 0;
+      const sIncInterest = ds ? round2(ds.inc_interest) : 0;
+      const sIncOther = ds ? round2(ds.inc_other) : 0;
+      const sOldGoldG = ds ? round2(ds.old_gold_g) : 0;
+      const sExpBuy = ds ? round2(ds.exp_buy) : 0;
+      const sExpPawn = ds ? round2(ds.exp_pawn) : 0;
+      const sExpOther = ds ? round2(ds.exp_other) : 0;
+      const sExpTransfer = ds ? round2(ds.exp_transfer) : 0;
+      const sExpHome = ds ? round2(ds.exp_home) : 0;
+
+      const totalIncome = round2(sIncSell + sIncRedeem + sIncInterest + sIncOther);
+      const totalExpense = round2(sExpBuy + sExpPawn + sExpOther + sExpTransfer + sExpHome);
+      const expectedCash = round2(runningCash + totalIncome - totalExpense);
+      const hasActualCash = d.actual_cash !== null && d.actual_cash !== undefined;
+      const actualCash = hasActualCash ? round2(d.actual_cash) : null;
+
+      runningCash = hasActualCash ? actualCash : expectedCash;
+      if (hasActualCash) lastActualCash = actualCash;
+      lastExpectedCash = expectedCash;
+      lastDayActualCash = actualCash;
+
+      runningPawn = round2(runningPawn - sIncRedeem + sExpPawn);
+
+      cumNewGoldG = round2(cumNewGoldG + sNewGoldG);
+      cumOldGoldG = round2(cumOldGoldG + sOldGoldG);
+      cumIncSell = round2(cumIncSell + sIncSell);
+      cumIncRedeem = round2(cumIncRedeem + sIncRedeem);
+      cumIncInterest = round2(cumIncInterest + sIncInterest);
+      cumIncOther = round2(cumIncOther + sIncOther);
+      cumExpBuy = round2(cumExpBuy + sExpBuy);
+      cumExpPawn = round2(cumExpPawn + sExpPawn);
+      cumExpOther = round2(cumExpOther + sExpOther);
+      cumExpTransfer = round2(cumExpTransfer + sExpTransfer);
+      cumExpHome = round2(cumExpHome + sExpHome);
+    }
+
+    const totalMonthIncome = round2(cumIncSell + cumIncRedeem + cumIncInterest + cumIncOther);
+    const totalMonthExpense = round2(cumExpBuy + cumExpPawn + cumExpOther + cumExpTransfer + cumExpHome);
+    const endingExpectedCash = days.length ? lastExpectedCash : m.carry_cash;
+    const endingCash = days.length && lastDayActualCash !== null ? lastDayActualCash : lastActualCash;
+
+    const totals = {
+      new_gold_g: cumNewGoldG,
+      inc_sell: cumIncSell,
+      inc_redeem: cumIncRedeem,
+      inc_interest: cumIncInterest,
+      inc_other: cumIncOther,
+      total_income: totalMonthIncome,
+      old_gold_g: cumOldGoldG,
+      exp_buy: cumExpBuy,
+      exp_pawn: cumExpPawn,
+      exp_other: cumExpOther,
+      exp_transfer: cumExpTransfer,
+      exp_home: cumExpHome,
+      total_expense: totalMonthExpense,
+      expected_cash: endingExpectedCash,
+      actual_cash: endingCash,
+      cumulative_pawn: runningPawn,
+    };
+
     return {
       month_key: m.month_key,
       month_order: m.month_order,
       be_year: getBeYearForMonthOrder(m.month_order),
       carry_cash: m.carry_cash,
       carry_pawn: m.carry_pawn,
-      dayCount: computed.days.length,
-      endingCash: computed.totals.actual_cash,
-      endingExpectedCash: computed.totals.expected_cash,
-      endingPawn: computed.totals.cumulative_pawn,
-      totals: computed.totals,
+      dayCount: days.length,
+      endingCash,
+      endingExpectedCash,
+      endingPawn: runningPawn,
+      totals,
     };
   });
 }
@@ -1423,7 +1615,7 @@ function getAccountMonthView(monthKey, yearBe) {
     targetKey = yearMonths.length ? yearMonths[yearMonths.length - 1].month_key : '';
   }
 
-  const monthRow = targetKey ? db.prepare('SELECT * FROM account_months WHERE month_key = ?').get(targetKey) : null;
+  const monthRow = targetKey ? stmt('SELECT * FROM account_months WHERE month_key = ?').get(targetKey) : null;
   if (!monthRow) {
     return { availableYears, activeYear: targetYear, months: yearMonths, activeMonth: null };
   }
@@ -1436,10 +1628,8 @@ function getAccountMonthView(monthKey, yearBe) {
   };
 }
 
-function getAnnualOverview(yearBe) {
-  const allMonths = getAccountMonthsSummaryList();
+function buildAnnualOverviewFromMonths(allMonths, cfgYears, yearBe) {
   const dataYears = [...new Set(allMonths.map((m) => m.be_year))].sort((a, b) => a - b);
-  const cfgYears = Object.keys(getAccountSheetsByYear()).map((y) => Number(y)).filter(Boolean);
   const availableYears = [...new Set([...dataYears, ...cfgYears])].sort((a, b) => a - b);
   const activeYear = Number(yearBe) || (dataYears.length ? dataYears[dataYears.length - 1] : 2569);
   const months = allMonths.filter((m) => m.be_year === activeYear);
@@ -1467,13 +1657,17 @@ function getAnnualOverview(yearBe) {
   return { availableYears, activeYear, months, yearTotals };
 }
 
+function getAnnualOverview(yearBe) {
+  const allMonths = getAccountMonthsSummaryList();
+  const cfgYears = Object.keys(getAccountSheetsByYear()).map((y) => Number(y)).filter(Boolean);
+  return buildAnnualOverviewFromMonths(allMonths, cfgYears, yearBe);
+}
+
 function removeSeededDefaultNov69VatRowsOnce() {
-  const done = db.prepare("SELECT value FROM sync_config WHERE key = 'vat_removed_default_nov69_v1'").get();
+  const done = stmt("SELECT value FROM sync_config WHERE key = 'vat_removed_default_nov69_v1'").get();
   if (done && done.value === '1') return;
 
-  const rows = db
-    .prepare("SELECT * FROM vat_sales_rows WHERE month_key = 'พ.ย. 69' ORDER BY row_order ASC, id ASC")
-    .all();
+  const rows = stmt("SELECT * FROM vat_sales_rows WHERE month_key = 'พ.ย. 69' ORDER BY row_order ASC, id ASC").all();
 
   const matchesSeededSample =
     rows.length === 13 &&
@@ -1487,9 +1681,9 @@ function removeSeededDefaultNov69VatRowsOnce() {
   db.exec('BEGIN');
   try {
     if (matchesSeededSample) {
-      db.prepare("DELETE FROM vat_sales_rows WHERE month_key = 'พ.ย. 69'").run();
+      stmt("DELETE FROM vat_sales_rows WHERE month_key = 'พ.ย. 69'").run();
     }
-    db.prepare("INSERT OR REPLACE INTO sync_config (key, value) VALUES ('vat_removed_default_nov69_v1', '1')").run();
+    stmt("INSERT OR REPLACE INTO sync_config (key, value) VALUES ('vat_removed_default_nov69_v1', '1')").run();
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');
@@ -1498,13 +1692,13 @@ function removeSeededDefaultNov69VatRowsOnce() {
 }
 
 function migrateVatPricesToOrnamentOnce() {
-  const done = db.prepare("SELECT value FROM sync_config WHERE key = 'vat_price_migrated_orn_v1'").get();
+  const done = stmt("SELECT value FROM sync_config WHERE key = 'vat_price_migrated_orn_v1'").get();
   if (done && done.value === '1') return;
 
-  const rows = db
-    .prepare('SELECT id, gold_bar_price, weight_g, exempt_base FROM vat_sales_rows WHERE gold_bar_price > 0 AND weight_g > 0 AND exempt_base > 0')
-    .all();
-  const upd = db.prepare('UPDATE vat_sales_rows SET gold_bar_price = ? WHERE id = ?');
+  const rows = stmt(
+    'SELECT id, gold_bar_price, weight_g, exempt_base FROM vat_sales_rows WHERE gold_bar_price > 0 AND weight_g > 0 AND exempt_base > 0'
+  ).all();
+  const upd = stmt('UPDATE vat_sales_rows SET gold_bar_price = ? WHERE id = ?');
 
   db.exec('BEGIN');
   try {
@@ -1517,7 +1711,7 @@ function migrateVatPricesToOrnamentOnce() {
         }
       }
     }
-    db.prepare("INSERT OR REPLACE INTO sync_config (key, value) VALUES ('vat_price_migrated_orn_v1', '1')").run();
+    stmt("INSERT OR REPLACE INTO sync_config (key, value) VALUES ('vat_price_migrated_orn_v1', '1')").run();
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');
@@ -1561,7 +1755,8 @@ function parseMonthShortAndYearShort(monthKey, activeYear) {
       break;
     }
   }
-  const beYear = getBeYearForMonthOrder(getMonthOrderForKey(s)) || Number(activeYear) || 2569;
+  const order = getMonthOrderForKey(s);
+  const beYear = order && order < 999999 ? getBeYearForMonthOrder(order) : Number(activeYear) || 2569;
   const yearFull = String(beYear);
   const yearShort = yearFull.slice(-2);
   return {
@@ -1574,18 +1769,47 @@ function parseMonthShortAndYearShort(monthKey, activeYear) {
 
 function getVatSalesReport(monthKey, yearBe) {
   initSchema();
-  const accView = getAccountMonthView(monthKey, yearBe);
-  const targetMonthKey =
-    monthKey && db.prepare('SELECT month_key FROM account_months WHERE month_key = ?').get(monthKey)
-      ? monthKey
-      : accView.activeMonth?.month?.month_key || monthKey || (accView.months.length ? accView.months[accView.months.length - 1].month_key : 'พ.ย. 69');
+  const rawMonths = stmt('SELECT month_key, month_order FROM account_months ORDER BY month_order ASC').all();
+  const allMonthsMeta = rawMonths.map((m) => ({
+    month_key: m.month_key,
+    month_order: m.month_order,
+    be_year: getBeYearForMonthOrder(m.month_order),
+  }));
+  const dataYears = [...new Set(allMonthsMeta.map((m) => m.be_year))].sort((a, b) => a - b);
+  const cfgYears = Object.keys(getAccountSheetsByYear()).map((y) => Number(y)).filter(Boolean);
+  const availableYears = [...new Set([...dataYears, ...cfgYears])].sort((a, b) => a - b);
 
-  const rows = db
-    .prepare('SELECT * FROM vat_sales_rows WHERE month_key = ? ORDER BY row_order ASC, date_iso ASC, id ASC')
-    .all(targetMonthKey);
+  let targetYear = Number(yearBe) || 0;
+  let targetKey = monthKey || '';
+  if (targetKey) {
+    const matched = allMonthsMeta.find((m) => m.month_key === targetKey);
+    if (matched) {
+      if (!targetYear) targetYear = matched.be_year;
+      else if (matched.be_year !== targetYear) targetKey = '';
+    } else if (targetYear) {
+      targetKey = '';
+    }
+  }
+  if (!targetYear) {
+    targetYear = dataYears.length ? dataYears[dataYears.length - 1] : 2569;
+  }
+  const yearMonths = allMonthsMeta.filter((m) => m.be_year === targetYear);
+  if (!targetKey) {
+    targetKey = yearMonths.length ? yearMonths[yearMonths.length - 1].month_key : '';
+  }
 
-  const candidateSales = db
-    .prepare('SELECT * FROM account_entries WHERE month_key = ? AND inc_sell > 0 ORDER BY date_iso ASC, id ASC')
+  const targetExistsInMonths = Boolean(monthKey && allMonthsMeta.some((m) => m.month_key === monthKey));
+  const targetMonthKey = targetExistsInMonths
+    ? monthKey
+    : targetKey || monthKey || (yearMonths.length ? yearMonths[yearMonths.length - 1].month_key : 'พ.ย. 69');
+
+  const rows = stmt('SELECT * FROM vat_sales_rows WHERE month_key = ? ORDER BY row_order ASC, date_iso ASC, id ASC').all(
+    targetMonthKey
+  );
+
+  const candidateSales = stmt(
+    'SELECT * FROM account_entries WHERE month_key = ? AND inc_sell > 0 ORDER BY date_iso ASC, id ASC'
+  )
     .all(targetMonthKey)
     .map((e) => ({
       ...e,
@@ -1606,12 +1830,12 @@ function getVatSalesReport(monthKey, yearBe) {
     totals.vat_amount = round2(totals.vat_amount + (Number(r.vat_amount) || 0));
   }
 
-  const { monthShort, monthFull, yearShort, yearFull } = parseMonthShortAndYearShort(targetMonthKey, accView.activeYear);
+  const { monthShort, monthFull, yearShort, yearFull } = parseMonthShortAndYearShort(targetMonthKey, targetYear);
 
   return {
-    availableYears: accView.availableYears,
-    activeYear: accView.activeYear,
-    months: accView.months,
+    availableYears,
+    activeYear: targetYear,
+    months: yearMonths,
     monthKey: targetMonthKey,
     monthShort,
     monthFull,
@@ -1658,8 +1882,8 @@ function saveVatSalesReport(monthKey, rowsInput) {
 
   db.exec('BEGIN');
   try {
-    db.prepare('DELETE FROM vat_sales_rows WHERE month_key = ?').run(targetMonthKey);
-    const ins = db.prepare(`
+    stmt('DELETE FROM vat_sales_rows WHERE month_key = ?').run(targetMonthKey);
+    const ins = stmt(`
       INSERT INTO vat_sales_rows (
         month_key, row_order, date_iso, invoice_no, buyer_name,
         gold_bar_price, weight_g, item_desc, sale_amount, exempt_base,
@@ -1690,9 +1914,9 @@ function saveVatSalesReport(monthKey, rowsInput) {
     throw err;
   }
 
-  const savedRows = db
-    .prepare('SELECT * FROM vat_sales_rows WHERE month_key = ? ORDER BY row_order ASC, id ASC')
-    .all(targetMonthKey);
+  const savedRows = stmt('SELECT * FROM vat_sales_rows WHERE month_key = ? ORDER BY row_order ASC, id ASC').all(
+    targetMonthKey
+  );
   const totals = {
     sale_amount: 0,
     exempt_base: 0,
@@ -1714,7 +1938,7 @@ function upsertGoldDailyPrices(records) {
   const list = Array.isArray(records) ? records : [];
   if (!list.length) return 0;
   const nowIso = new Date().toISOString();
-  const stmt = db.prepare(`
+  const upsertStmt = stmt(`
     INSERT INTO gold_daily_prices (
       date_iso, bar_buy, bar_sell, orn_tax_base, orn_sell, seq, time_str, source, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1736,7 +1960,7 @@ function upsertGoldDailyPrices(records) {
       const dateIso = String(r.date_iso || '').trim();
       const barBuy = Number(r.bar_buy) || 0;
       if (!/^\d{4}-\d{2}-\d{2}$/.test(dateIso) || barBuy <= 0) continue;
-      stmt.run(
+      upsertStmt.run(
         dateIso,
         barBuy,
         Number(r.bar_sell) || 0,
@@ -1760,13 +1984,12 @@ function upsertGoldDailyPrices(records) {
 function getGoldDailyPricesForMonth(yearCe, monthNum) {
   initSchema();
   const ym = `${Number(yearCe)}-${String(Number(monthNum)).padStart(2, '0')}`;
-  const rows = db
-    .prepare('SELECT * FROM gold_daily_prices WHERE date_iso >= ? AND date_iso <= ? ORDER BY date_iso ASC')
-    .all(`${ym}-01`, `${ym}-31`);
+  const rows = stmt('SELECT * FROM gold_daily_prices WHERE date_iso >= ? AND date_iso <= ? ORDER BY date_iso ASC').all(
+    `${ym}-01`,
+    `${ym}-31`
+  );
   const prevFallback =
-    db
-      .prepare('SELECT * FROM gold_daily_prices WHERE date_iso < ? ORDER BY date_iso DESC LIMIT 1')
-      .get(`${ym}-01`) || null;
+    stmt('SELECT * FROM gold_daily_prices WHERE date_iso < ? ORDER BY date_iso DESC LIMIT 1').get(`${ym}-01`) || null;
 
   const prices = {};
   for (const r of rows) {
@@ -1787,11 +2010,11 @@ function getGtaPriceReport(yearBe, monthNum, fetchedPricesMap = {}, overwritePri
 
   const yearCe = targetYearBe - 543;
   const ymKey = `${yearCe}-${String(targetMonthNum).padStart(2, '0')}`;
-  const daysInMonth = new Date(yearCe, targetMonthNum, 0).getDate();
+  const daysInMonth = new Date(Date.UTC(yearCe, targetMonthNum, 0)).getUTCDate();
   const monthFull = THAI_MONTHS_FULL[targetMonthNum - 1] || '';
   const yearFull = String(targetYearBe);
 
-  const savedList = db.prepare('SELECT * FROM gta_price_rows WHERE ym_key = ? ORDER BY day_no ASC').all(ymKey);
+  const savedList = stmt('SELECT * FROM gta_price_rows WHERE ym_key = ? ORDER BY day_no ASC').all(ymKey);
   const savedMap = new Map();
   for (const s of savedList) {
     savedMap.set(Number(s.day_no), s);
@@ -1866,7 +2089,7 @@ function saveGtaPriceReport(yearBe, monthNum, rowsInput) {
 
   const yearCe = targetYearBe - 543;
   const ymKey = `${yearCe}-${String(targetMonthNum).padStart(2, '0')}`;
-  const daysInMonth = new Date(yearCe, targetMonthNum, 0).getDate();
+  const daysInMonth = new Date(Date.UTC(yearCe, targetMonthNum, 0)).getUTCDate();
   const list = Array.isArray(rowsInput) ? rowsInput : [];
   const nowIso = new Date().toISOString();
 
@@ -1878,8 +2101,8 @@ function saveGtaPriceReport(yearBe, monthNum, rowsInput) {
 
   db.exec('BEGIN');
   try {
-    db.prepare('DELETE FROM gta_price_rows WHERE ym_key = ?').run(ymKey);
-    const ins = db.prepare(`
+    stmt('DELETE FROM gta_price_rows WHERE ym_key = ?').run(ymKey);
+    const ins = stmt(`
       INSERT INTO gta_price_rows (
         ym_key, day_no, date_iso, gold_percent, bar_buy, bar_sell, orn_buy, orn_sell, note, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1960,9 +2183,7 @@ function getSsoPayrollReport(yearBe, monthNum) {
   const yearFull = String(targetYearBe);
   const yearShort = yearFull.slice(-2);
 
-  const savedRows = db
-    .prepare('SELECT * FROM sso_payroll_rows WHERE ym_key = ? ORDER BY row_order ASC, id ASC')
-    .all(ymKey);
+  const savedRows = stmt('SELECT * FROM sso_payroll_rows WHERE ym_key = ? ORDER BY row_order ASC, id ASC').all(ymKey);
 
   const rows =
     savedRows.length > 0
@@ -2020,8 +2241,8 @@ function saveSsoPayrollReport(yearBe, monthNum, rowsInput) {
 
   db.exec('BEGIN');
   try {
-    db.prepare('DELETE FROM sso_payroll_rows WHERE ym_key = ?').run(ymKey);
-    const ins = db.prepare(`
+    stmt('DELETE FROM sso_payroll_rows WHERE ym_key = ?').run(ymKey);
+    const ins = stmt(`
       INSERT INTO sso_payroll_rows (
         ym_key, row_order, employee_name, salary, daily_rate, work_days, daily_total,
         overtime, bonus, total_income, tax, sso, other_deduct, net_pay, signature_text, updated_at
@@ -2070,11 +2291,11 @@ function getVatRowsForYearMonth(yearBe, monthNum) {
   const targetOrder = y * 100 + m;
 
   let monthKey = '';
-  const accRow = db.prepare('SELECT month_key FROM account_months WHERE month_order = ? LIMIT 1').get(targetOrder);
+  const accRow = stmt('SELECT month_key FROM account_months WHERE month_order = ? LIMIT 1').get(targetOrder);
   if (accRow && accRow.month_key) {
     monthKey = accRow.month_key;
   } else {
-    const distinctMonths = db.prepare('SELECT DISTINCT month_key FROM vat_sales_rows').all();
+    const distinctMonths = stmt('SELECT DISTINCT month_key FROM vat_sales_rows').all();
     for (const dm of distinctMonths) {
       if (getMonthOrderForKey(dm.month_key) === targetOrder) {
         monthKey = dm.month_key;
@@ -2088,9 +2309,9 @@ function getVatRowsForYearMonth(yearBe, monthNum) {
     return { monthKey: '', rows: [], totals };
   }
 
-  const rows = db
-    .prepare('SELECT * FROM vat_sales_rows WHERE month_key = ? ORDER BY row_order ASC, date_iso ASC, id ASC')
-    .all(monthKey);
+  const rows = stmt('SELECT * FROM vat_sales_rows WHERE month_key = ? ORDER BY row_order ASC, date_iso ASC, id ASC').all(
+    monthKey
+  );
   for (const r of rows) {
     totals.sale_amount = round2(totals.sale_amount + (Number(r.sale_amount) || 0));
     totals.exempt_base = round2(totals.exempt_base + (Number(r.exempt_base) || 0));
@@ -2105,13 +2326,18 @@ function addAccountEntry(input) {
 }
 
 function updateAccountEntry(id, input) {
-  const existing = db.prepare('SELECT * FROM account_entries WHERE id = ?').get(Number(id));
+  const existing = stmt('SELECT * FROM account_entries WHERE id = ?').get(Number(id));
   if (!existing) throw new Error('ไม่พบรายการบัญชี');
-  const dateIso = input.date_iso ? normalizeSheetDate(input.date_iso) : existing.date_iso;
+  const dateIso = (input.date_iso ? normalizeSheetDate(input.date_iso) : '') || existing.date_iso;
   const monthKey = getMonthKeyForIsoDate(dateIso);
   ensureAccountMonthExists(monthKey, dateIso);
+  stmt('INSERT OR IGNORE INTO account_days (month_key, date_iso, actual_cash, note) VALUES (?, ?, NULL, ?)').run(
+    monthKey,
+    dateIso,
+    ''
+  );
 
-  db.prepare(
+  stmt(
     `UPDATE account_entries
      SET month_key = ?, date_iso = ?, description = ?,
          new_gold_g = ?, inc_sell = ?, inc_redeem = ?, inc_interest = ?, inc_other = ?,
@@ -2134,13 +2360,13 @@ function updateAccountEntry(id, input) {
     round2(input.exp_home !== undefined ? Number(input.exp_home) : existing.exp_home),
     existing.id
   );
-  return db.prepare('SELECT * FROM account_entries WHERE id = ?').get(existing.id);
+  return stmt('SELECT * FROM account_entries WHERE id = ?').get(existing.id);
 }
 
 function deleteAccountEntry(id) {
-  const existing = db.prepare('SELECT * FROM account_entries WHERE id = ?').get(Number(id));
+  const existing = stmt('SELECT * FROM account_entries WHERE id = ?').get(Number(id));
   if (!existing) throw new Error('ไม่พบรายการบัญชี');
-  db.prepare('DELETE FROM account_entries WHERE id = ?').run(existing.id);
+  stmt('DELETE FROM account_entries WHERE id = ?').run(existing.id);
   return existing;
 }
 
@@ -2150,54 +2376,119 @@ function updateAccountDailyCash(dateIsoRaw, actualCash, note) {
   ensureAccountMonthExists(monthKey, dateIso);
 
   const cashVal = actualCash === null || actualCash === '' || actualCash === undefined ? null : round2(Number(actualCash));
-  const existing = db.prepare('SELECT * FROM account_days WHERE month_key = ? AND date_iso = ?').get(monthKey, dateIso);
+  const existing = stmt('SELECT * FROM account_days WHERE month_key = ? AND date_iso = ?').get(monthKey, dateIso);
   if (existing) {
-    db.prepare('UPDATE account_days SET actual_cash = ?, note = COALESCE(?, note) WHERE id = ?').run(
+    stmt('UPDATE account_days SET actual_cash = ?, note = COALESCE(?, note) WHERE id = ?').run(
       cashVal,
       note !== undefined ? String(note) : null,
       existing.id
     );
   } else {
-    db.prepare('INSERT INTO account_days (month_key, date_iso, actual_cash, note) VALUES (?, ?, ?, ?)').run(
+    stmt('INSERT INTO account_days (month_key, date_iso, actual_cash, note) VALUES (?, ?, ?, ?)').run(
       monthKey,
       dateIso,
       cashVal,
       note || ''
     );
   }
-  return db.prepare('SELECT * FROM account_days WHERE month_key = ? AND date_iso = ?').get(monthKey, dateIso);
+  return stmt('SELECT * FROM account_days WHERE month_key = ? AND date_iso = ?').get(monthKey, dateIso);
 }
 
-function getStockSummaryAndHistory(selectedDateIso) {
-  const openRows = db.prepare('SELECT col_key, qty FROM stock_opening').all();
+function getStockSummaryAndHistory(selectedDateIso, options = {}) {
+  const includeHistory = options.includeHistory !== false;
+  const openRows = stmt('SELECT col_key, qty FROM stock_opening').all();
   const openingMap = {};
   for (const r of openRows) openingMap[r.col_key] = r.qty;
-
-  const moveRows = db.prepare('SELECT * FROM stock_movements ORDER BY date_iso ASC, move_type ASC').all();
 
   const currentMap = {};
   for (const colDef of STOCK_COLUMNS) {
     currentMap[colDef.col] = openingMap[colDef.col] || 0;
   }
 
-  const datesSet = new Set();
-  const dayMovements = {};
-  for (const m of moveRows) {
-    datesSet.add(m.date_iso);
-    if (!dayMovements[m.date_iso]) {
-      dayMovements[m.date_iso] = { in: {}, out: {}, damaged: {} };
-    }
-    dayMovements[m.date_iso][m.move_type][m.col_key] = round2(m.qty);
+  const targetDate = selectedDateIso || getTodayIsoBangkok();
+  let targetMoves = { in: {}, out: {}, damaged: {} };
+  let totalTrackedDays = 0;
+  const history = [];
 
-    if (m.move_type === 'in') {
-      currentMap[m.col_key] = round2((currentMap[m.col_key] || 0) + m.qty);
-    } else if (m.move_type === 'out' || m.move_type === 'damaged') {
-      currentMap[m.col_key] = round2((currentMap[m.col_key] || 0) - m.qty);
+  if (!includeHistory) {
+    const aggRows = stmt(
+      'SELECT col_key, move_type, COALESCE(SUM(qty), 0) AS qty FROM stock_movements GROUP BY col_key, move_type'
+    ).all();
+    for (const m of aggRows) {
+      if (m.move_type === 'in') {
+        currentMap[m.col_key] = round2((currentMap[m.col_key] || 0) + m.qty);
+      } else if (m.move_type === 'out' || m.move_type === 'damaged') {
+        currentMap[m.col_key] = round2((currentMap[m.col_key] || 0) - m.qty);
+      }
+    }
+    const targetRows = stmt('SELECT col_key, move_type, qty FROM stock_movements WHERE date_iso = ?').all(targetDate);
+    for (const m of targetRows) {
+      if (targetMoves[m.move_type]) {
+        targetMoves[m.move_type][m.col_key] = round2(m.qty);
+      }
+    }
+    totalTrackedDays = stmt('SELECT COUNT(DISTINCT date_iso) AS cnt FROM stock_movements').get()?.cnt || 0;
+  } else {
+    const moveRows = stmt('SELECT * FROM stock_movements ORDER BY date_iso ASC, move_type ASC').all();
+    const datesSet = new Set();
+    const dayMovements = {};
+    for (const m of moveRows) {
+      datesSet.add(m.date_iso);
+      if (!dayMovements[m.date_iso]) {
+        dayMovements[m.date_iso] = { in: {}, out: {}, damaged: {} };
+      }
+      dayMovements[m.date_iso][m.move_type][m.col_key] = round2(m.qty);
+
+      if (m.move_type === 'in') {
+        currentMap[m.col_key] = round2((currentMap[m.col_key] || 0) + m.qty);
+      } else if (m.move_type === 'out' || m.move_type === 'damaged') {
+        currentMap[m.col_key] = round2((currentMap[m.col_key] || 0) - m.qty);
+      }
+    }
+
+    targetMoves = dayMovements[targetDate] || { in: {}, out: {}, damaged: {} };
+    const sortedDates = [...datesSet].sort();
+    totalTrackedDays = sortedDates.length;
+
+    const running = { ...openingMap };
+    for (const dIso of sortedDates) {
+      const dm = dayMovements[dIso];
+      let newGoldG = 0;
+      let totalInPieces = 0;
+      let totalOutPieces = 0;
+      let totalDmgPieces = 0;
+      for (const colDef of STOCK_COLUMNS) {
+        const c = colDef.col;
+        const qIn = dm.in[c] || 0;
+        const qOut = dm.out[c] || 0;
+        const qDmg = dm.damaged[c] || 0;
+        const bal = round2((running[c] || 0) + qIn - qOut - qDmg);
+        running[c] = bal;
+        if (!colDef.isWeight) {
+          if (colDef.unitWeight > 0) {
+            newGoldG += bal * colDef.unitWeight;
+          }
+          totalInPieces += qIn;
+          totalOutPieces += qOut;
+          totalDmgPieces += qDmg;
+        }
+      }
+      const oldGoldG = round2((running.C || 0) + (running.D || 0));
+      history.push({
+        date_iso: dIso,
+        date_short: formatThaiDateShort(dIso),
+        date_long: formatThaiDateLong(dIso),
+        inOld90: dm.in.C || 0,
+        inOld965: dm.in.D || 0,
+        totalInPieces: round2(totalInPieces),
+        totalOutPieces: round2(totalOutPieces),
+        totalDmgPieces: round2(totalDmgPieces),
+        endOldGoldG: oldGoldG,
+        endNewGoldG: round2(newGoldG),
+        movements: dm,
+      });
     }
   }
-
-  const targetDate = selectedDateIso || getTodayIsoBangkok();
-  const targetMoves = dayMovements[targetDate] || { in: {}, out: {}, damaged: {} };
 
   // Group current balances matching the sheet's weight-tier summary row
   const groupsMap = new Map();
@@ -2248,49 +2539,6 @@ function getStockSummaryAndHistory(selectedDateIso) {
     };
   });
 
-  // Build chronological daily balance history (latest 30 days)
-  const sortedDates = [...datesSet].sort();
-  const running = { ...openingMap };
-  const history = [];
-  for (const dIso of sortedDates) {
-    const dm = dayMovements[dIso];
-    for (const colDef of STOCK_COLUMNS) {
-      const c = colDef.col;
-      const qIn = dm.in[c] || 0;
-      const qOut = dm.out[c] || 0;
-      const qDmg = dm.damaged[c] || 0;
-      running[c] = round2((running[c] || 0) + qIn - qOut - qDmg);
-    }
-    let oldGoldG = round2((running.C || 0) + (running.D || 0));
-    let newGoldG = 0;
-    let totalInPieces = 0;
-    let totalOutPieces = 0;
-    let totalDmgPieces = 0;
-    for (const colDef of STOCK_COLUMNS) {
-      if (!colDef.isWeight && colDef.unitWeight > 0) {
-        newGoldG = round2(newGoldG + (running[colDef.col] || 0) * colDef.unitWeight);
-      }
-      if (!colDef.isWeight) {
-        totalInPieces += dm.in[colDef.col] || 0;
-        totalOutPieces += dm.out[colDef.col] || 0;
-        totalDmgPieces += dm.damaged[colDef.col] || 0;
-      }
-    }
-    history.push({
-      date_iso: dIso,
-      date_short: formatThaiDateShort(dIso),
-      date_long: formatThaiDateLong(dIso),
-      inOld90: dm.in.C || 0,
-      inOld965: dm.in.D || 0,
-      totalInPieces: round2(totalInPieces),
-      totalOutPieces: round2(totalOutPieces),
-      totalDmgPieces: round2(totalDmgPieces),
-      endOldGoldG: oldGoldG,
-      endNewGoldG: newGoldG,
-      movements: dm,
-    });
-  }
-
   return {
     selectedDate: targetDate,
     totals: {
@@ -2300,11 +2548,11 @@ function getStockSummaryAndHistory(selectedDateIso) {
       totalStandardGoldWeightG,
       totalStandardPieces: round2(totalStandardPieces),
       totalSpecialPieces: round2(totalSpecialPieces),
-      totalTrackedDays: sortedDates.length,
+      totalTrackedDays,
     },
     groups: [...groupsMap.values()],
     columns: columnsDetail,
-    historyDesc: history.reverse(),
+    historyDesc: includeHistory ? history.reverse() : [],
   };
 }
 
@@ -2313,13 +2561,13 @@ function upsertStockMovements(dateIsoRaw, moveType, updates) {
   if (!['in', 'out', 'damaged'].includes(moveType)) {
     throw new Error(`Invalid stock moveType: ${moveType}`);
   }
-  const stmt = db.prepare(`
+  const upsertStmt = stmt(`
     INSERT INTO stock_movements (date_iso, move_type, col_key, qty)
     VALUES (?, ?, ?, ?)
     ON CONFLICT(date_iso, move_type, col_key)
     DO UPDATE SET qty = CASE WHEN ? = 'add' THEN stock_movements.qty + excluded.qty ELSE excluded.qty END
   `);
-  const delStmt = db.prepare('DELETE FROM stock_movements WHERE date_iso = ? AND move_type = ? AND col_key = ?');
+  const delStmt = stmt('DELETE FROM stock_movements WHERE date_iso = ? AND move_type = ? AND col_key = ?');
 
   const mode = updates.__mode === 'add' ? 'add' : 'set';
   const changed = [];
@@ -2332,7 +2580,7 @@ function upsertStockMovements(dateIsoRaw, moveType, updates) {
       if (qty === 0 && mode === 'set') {
         delStmt.run(dateIso, moveType, colKey);
       } else if (qty !== 0) {
-        stmt.run(dateIso, moveType, colKey, qty, mode);
+        upsertStmt.run(dateIso, moveType, colKey, qty, mode);
       }
       changed.push({ col_key: colKey, qty });
     }
@@ -2345,16 +2593,16 @@ function upsertStockMovements(dateIsoRaw, moveType, updates) {
 }
 
 function getSyncConfig() {
-  const rows = db.prepare('SELECT key, value FROM sync_config').all();
+  const rows = stmt('SELECT key, value FROM sync_config').all();
   const cfg = {};
   for (const r of rows) cfg[r.key] = r.value;
   return cfg;
 }
 
 function setSyncConfig(updates) {
-  const stmt = db.prepare('INSERT OR REPLACE INTO sync_config (key, value) VALUES (?, ?)');
+  const cfgStmt = stmt('INSERT OR REPLACE INTO sync_config (key, value) VALUES (?, ?)');
   for (const [k, v] of Object.entries(updates)) {
-    stmt.run(k, v === null || v === undefined ? '' : String(v));
+    cfgStmt.run(k, v === null || v === undefined ? '' : String(v));
   }
   return getSyncConfig();
 }
@@ -2365,8 +2613,8 @@ function extractSheetId(input) {
   return m ? m[1] : s;
 }
 
-function getAccountSheetsByYear() {
-  const cfg = getSyncConfig();
+function getAccountSheetsByYear(cfgInput) {
+  const cfg = cfgInput || getSyncConfig();
   let map = {};
   try {
     map = JSON.parse(cfg.account_sheets_by_year_json || '{}') || {};
@@ -2387,14 +2635,15 @@ function getAccountSheetsByYear() {
 }
 
 function getAccountSheetIdForDate(isoDate, monthKey) {
-  const sheetsByYear = getAccountSheetsByYear();
+  const cfg = getSyncConfig();
+  const sheetsByYear = getAccountSheetsByYear(cfg);
   let beYear = '';
   if (isoDate && /^\d{4}/.test(String(isoDate))) {
     beYear = String(Number(String(isoDate).slice(0, 4)) + 543);
   } else if (monthKey) {
     beYear = String(getBeYearForMonthOrder(getMonthOrderForKey(monthKey)));
   }
-  return sheetsByYear[beYear] || getSyncConfig().account_sheet_id || SHEET_IDS.account;
+  return sheetsByYear[beYear] || cfg.account_sheet_id || SHEET_IDS.account;
 }
 
 function enqueueSync(targetSheet, action, payload) {
@@ -2402,7 +2651,7 @@ function enqueueSync(targetSheet, action, payload) {
   if (targetSheet === 'account' && payload && typeof payload === 'object') {
     const monthKey = payload.month_key || (payload.date_iso ? getMonthKeyForIsoDate(payload.date_iso) : '');
     const monthRow = monthKey
-      ? db.prepare('SELECT carry_cash, carry_pawn FROM account_months WHERE month_key = ?').get(monthKey)
+      ? stmt('SELECT carry_cash, carry_pawn FROM account_months WHERE month_key = ?').get(monthKey)
       : null;
     finalPayload = {
       ...payload,
@@ -2414,20 +2663,16 @@ function enqueueSync(targetSheet, action, payload) {
     }
   }
   const nowIso = new Date().toISOString();
-  const res = db
-    .prepare(
-      `INSERT INTO sync_queue (target_sheet, action, payload_json, status, created_at)
-       VALUES (?, ?, ?, 'pending', ?)`
-    )
-    .run(targetSheet, action, JSON.stringify(finalPayload), nowIso);
-  return db.prepare('SELECT * FROM sync_queue WHERE id = ?').get(res.lastInsertRowid);
+  const res = stmt(
+    `INSERT INTO sync_queue (target_sheet, action, payload_json, status, created_at)
+     VALUES (?, ?, ?, 'pending', ?)`
+  ).run(targetSheet, action, JSON.stringify(finalPayload), nowIso);
+  return stmt('SELECT * FROM sync_queue WHERE id = ?').get(res.lastInsertRowid);
 }
 
 function getSyncQueue(limit = 50) {
-  const items = db.prepare('SELECT * FROM sync_queue ORDER BY id DESC LIMIT ?').all(limit);
-  const counts = db
-    .prepare(`SELECT status, COUNT(*) AS cnt FROM sync_queue GROUP BY status`)
-    .all();
+  const items = stmt('SELECT * FROM sync_queue ORDER BY id DESC LIMIT ?').all(limit);
+  const counts = stmt(`SELECT status, COUNT(*) AS cnt FROM sync_queue GROUP BY status`).all();
   const countMap = { pending: 0, synced: 0, failed: 0 };
   for (const c of counts) countMap[c.status] = c.cnt;
   return { counts: countMap, items };
@@ -2435,7 +2680,7 @@ function getSyncQueue(limit = 50) {
 
 function updateSyncQueueItem(id, status, errorMsg = '') {
   const syncedAt = status === 'synced' ? new Date().toISOString() : '';
-  db.prepare('UPDATE sync_queue SET status = ?, error_msg = ?, synced_at = ? WHERE id = ?').run(
+  stmt('UPDATE sync_queue SET status = ?, error_msg = ?, synced_at = ? WHERE id = ?').run(
     status,
     errorMsg || '',
     syncedAt,
@@ -2446,15 +2691,19 @@ function updateSyncQueueItem(id, status, errorMsg = '') {
 function getDashboardSummary(yearBe) {
   const todayIso = getTodayIsoBangkok();
   const pawnData = getPawnTicketsWithOverdue({ limit: 8, overdueOnly: true }, todayIso);
-  const annual = getAnnualOverview(yearBe);
-  const allMonths = getAccountMonthsSummaryList();
-  const latestMonthSummary = allMonths.length ? allMonths[allMonths.length - 1] : null;
-  const activeMonthView = latestMonthSummary ? getAccountMonthView(latestMonthSummary.month_key) : null;
-  const latestDays = activeMonthView?.activeMonth?.days || [];
-  const latestDay = latestDays.length ? latestDays[latestDays.length - 1] : null;
-  const stock = getStockSummaryAndHistory(todayIso);
-  const syncQueue = getSyncQueue(10);
   const syncConfig = getSyncConfig();
+  const accountSheetsByYear = getAccountSheetsByYear(syncConfig);
+  const cfgYears = Object.keys(accountSheetsByYear).map((y) => Number(y)).filter(Boolean);
+  const allMonths = getAccountMonthsSummaryList();
+  const annual = buildAnnualOverviewFromMonths(allMonths, cfgYears, yearBe);
+  const latestMonthSummary = allMonths.length ? allMonths[allMonths.length - 1] : null;
+  const latestMonthRow = latestMonthSummary
+    ? stmt('SELECT * FROM account_months WHERE month_key = ?').get(latestMonthSummary.month_key)
+    : null;
+  const latestDays = latestMonthRow ? computeMonthData(latestMonthRow).days : [];
+  const latestDay = latestDays.length ? latestDays[latestDays.length - 1] : null;
+  const stock = getStockSummaryAndHistory(todayIso, { includeHistory: false });
+  const syncQueue = getSyncQueue(10);
 
   return {
     todayIso,
@@ -2473,7 +2722,7 @@ function getDashboardSummary(yearBe) {
       lastPullAt: syncConfig.last_pull_at,
       lastPushAt: syncConfig.last_push_at,
       sheetIds: SHEET_IDS,
-      accountSheetsByYear: getAccountSheetsByYear(),
+      accountSheetsByYear,
     },
   };
 }
