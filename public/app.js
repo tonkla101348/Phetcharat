@@ -19,6 +19,7 @@ const state = {
   ssoYearBe: 0,
   ssoMonthNum: 0,
   ssoRows: [],
+  combinedBundle: null,
   stockCache: null,
   syncCache: null,
 };
@@ -107,6 +108,7 @@ function getActivePrintDocumentTitle() {
 }
 
 window.addEventListener('beforeprint', () => {
+  if (document.body.classList.contains('printing-combined')) return;
   if (state.activeTab === 'vat') renderVatPrintPages();
   else if (state.activeTab === 'gta') renderGtaPrintPages();
   else if (state.activeTab === 'sso') renderSsoPrintPages();
@@ -115,7 +117,11 @@ window.addEventListener('beforeprint', () => {
 });
 
 window.addEventListener('afterprint', () => {
+  document.body.classList.remove('printing-combined');
+  const combinedEl = document.getElementById('combined-print-pages');
+  if (combinedEl) combinedEl.innerHTML = '';
   document.title = DEFAULT_PAGE_TITLE;
+  setPrintPageOrientation(state.activeTab === 'sso' ? 'landscape' : 'portrait');
 });
 
 function esc(str) {
@@ -952,9 +958,9 @@ async function loadVatView() {
   }
 }
 
-function computeVatTotalsClient() {
+function computeVatTotalsClient(rows = state.vatRows) {
   const totals = { sale_amount: 0, exempt_base: 0, taxable_base: 0, vat_amount: 0 };
-  for (const r of state.vatRows) {
+  for (const r of rows || []) {
     totals.sale_amount = round2Client(totals.sale_amount + (Number(r.sale_amount) || 0));
     totals.exempt_base = round2Client(totals.exempt_base + (Number(r.exempt_base) || 0));
     totals.taxable_base = round2Client(totals.taxable_base + (Number(r.taxable_base) || 0));
@@ -1058,24 +1064,18 @@ function renderVatTable() {
   renderVatPrintPages();
 }
 
-function renderVatPrintPages() {
-  const container = document.getElementById('vat-print-pages');
-  if (!container) return;
-
+function buildVatPrintPagesHtml({ rows = [], monthFull = '', yearFull = '', hideRepeatDate = true, showTotal = true } = {}) {
   const ROWS_PER_PAGE = 34;
-  const monthShort = document.getElementById('vat-print-month')?.textContent || '';
-  const yearShort = document.getElementById('vat-print-year')?.textContent || '';
-  const hideRepeatDate = document.getElementById('vat-hide-repeat-date')?.checked;
-  const showTotal = document.getElementById('vat-show-total-row')?.checked;
-  const totals = computeVatTotalsClient();
+  const list = Array.isArray(rows) ? rows : [];
+  const totals = computeVatTotalsClient(list);
 
   const chunks = [];
-  for (let i = 0; i < state.vatRows.length; i += ROWS_PER_PAGE) {
-    chunks.push(state.vatRows.slice(i, i + ROWS_PER_PAGE));
+  for (let i = 0; i < list.length; i += ROWS_PER_PAGE) {
+    chunks.push(list.slice(i, i + ROWS_PER_PAGE));
   }
   if (chunks.length === 0) chunks.push([]);
 
-  container.innerHTML = chunks
+  return chunks
     .map((chunk, pageIdx) => {
       const isLastPage = pageIdx === chunks.length - 1;
       let prevDate = '';
@@ -1110,7 +1110,7 @@ function renderVatPrintPages() {
         isLastPage && showTotal
           ? `
           <tr class="vat-total-row">
-            <td colspan="4" class="center">รวมทั้งสิ้น (${state.vatRows.length} รายการ)</td>
+            <td colspan="4" class="center">รวมทั้งสิ้น (${list.length} รายการ)</td>
             <td class="num">${fmtMoney(totals.sale_amount)}</td>
             <td class="num">${fmtVatDec(totals.exempt_base)}</td>
             <td class="num">${fmtVatDec(totals.taxable_base)}</td>
@@ -1123,8 +1123,8 @@ function renderVatPrintPages() {
           <div class="vat-doc-header">
             <div class="vat-doc-title">รายงานภาษีขาย</div>
             <div class="vat-doc-period">
-              เดือนภาษี <span class="vat-period-blank">${esc(monthShort)}</span>
-              ปี <span class="vat-period-blank">${esc(yearShort)}</span>
+              เดือนภาษี <span class="vat-period-blank">${esc(monthFull)}</span>
+              ปี <span class="vat-period-blank">${esc(yearFull)}</span>
             </div>
             <div class="vat-company-line">
               <span>ชื่อผู้ประกอบการ : <strong>บริษัท เพชรรัตน์ (บ้านกรวด) จำกัด</strong></span>
@@ -1157,6 +1157,24 @@ function renderVatPrintPages() {
       `;
     })
     .join('');
+}
+
+function renderVatPrintPages() {
+  const container = document.getElementById('vat-print-pages');
+  if (!container) return;
+
+  const monthFull = document.getElementById('vat-print-month')?.textContent || '';
+  const yearFull = document.getElementById('vat-print-year')?.textContent || '';
+  const hideRepeatDate = Boolean(document.getElementById('vat-hide-repeat-date')?.checked);
+  const showTotal = Boolean(document.getElementById('vat-show-total-row')?.checked);
+
+  container.innerHTML = buildVatPrintPagesHtml({
+    rows: state.vatRows,
+    monthFull,
+    yearFull,
+    hideRepeatDate,
+    showTotal,
+  });
 }
 
 function printVatReport() {
@@ -1739,14 +1757,8 @@ function renderGtaTable() {
   renderGtaPrintPages();
 }
 
-function renderGtaPrintPages() {
-  const container = document.getElementById('gta-print-pages');
-  if (!container) return;
-
-  const monthFull = document.getElementById('gta-print-month')?.textContent || '';
-  const yearFull = document.getElementById('gta-print-year')?.textContent || '';
-
-  const rowsHtml = state.gtaRows
+function buildGtaPrintPageHtml({ rows = [], monthFull = '', yearFull = '' } = {}) {
+  const rowsHtml = (rows || [])
     .map((r) => {
       const noteText = String(r.note || '').trim();
       const isClosed = noteText === 'ปิด';
@@ -1764,7 +1776,7 @@ function renderGtaPrintPages() {
     })
     .join('');
 
-  container.innerHTML = `
+  return `
     <div class="vat-print-page">
       <div class="vat-doc-header">
         <div class="vat-doc-title">ตารางการซื้อ-ขายทองรูปพรรณตามประกาศของสมาคมค้าทองคำ</div>
@@ -1801,6 +1813,19 @@ function renderGtaPrintPages() {
       </table>
     </div>
   `;
+}
+
+function renderGtaPrintPages() {
+  const container = document.getElementById('gta-print-pages');
+  if (!container) return;
+
+  const monthFull = document.getElementById('gta-print-month')?.textContent || '';
+  const yearFull = document.getElementById('gta-print-year')?.textContent || '';
+  container.innerHTML = buildGtaPrintPageHtml({
+    rows: state.gtaRows,
+    monthFull,
+    yearFull,
+  });
 }
 
 async function saveGtaReport() {
@@ -1909,11 +1934,11 @@ function fmtSsoNetDisplay(val) {
   return fmtSsoNum(num);
 }
 
-function computeSsoTotalsClient() {
+function computeSsoTotalsClient(rows = state.ssoRows) {
   const totals = {};
   for (const field of SSO_NUMERIC_FIELDS) {
     totals[field] = 0;
-    for (const r of state.ssoRows) {
+    for (const r of rows || []) {
       totals[field] = round2Client(totals[field] + (Number(r[field]) || 0));
     }
   }
@@ -2015,15 +2040,11 @@ function renderSsoTable() {
   renderSsoPrintPages();
 }
 
-function renderSsoPrintPages() {
-  const container = document.getElementById('sso-print-pages');
-  if (!container) return;
+function buildSsoPrintPageHtml({ rows = [], monthFull = '', yearFull = '' } = {}) {
+  const list = Array.isArray(rows) ? rows : [];
+  const totals = computeSsoTotalsClient(list);
 
-  const monthFull = document.getElementById('sso-print-month')?.textContent || '';
-  const yearFull = document.getElementById('sso-print-year')?.textContent || '';
-  const totals = computeSsoTotalsClient();
-
-  const rowsHtml = state.ssoRows
+  const rowsHtml = list
     .map((r, idx) => {
       const editableNumCells = SSO_EDITABLE_NUM_FIELDS.map(
         (field) => `<td class="num">${esc(fmtSsoNum(r[field]))}</td>`
@@ -2042,7 +2063,7 @@ function renderSsoPrintPages() {
 
   const totalRowHtml = buildSsoTotalCellsHtml(totals, false);
 
-  container.innerHTML = `
+  return `
     <div class="sso-print-page">
       <div class="vat-doc-header">
         <div class="vat-doc-title">บริษัท เพชรรัตน์ (บ้านกรวด) จำกัด</div>
@@ -2096,6 +2117,19 @@ function renderSsoPrintPages() {
   `;
 }
 
+function renderSsoPrintPages() {
+  const container = document.getElementById('sso-print-pages');
+  if (!container) return;
+
+  const monthFull = document.getElementById('sso-print-month')?.textContent || '';
+  const yearFull = document.getElementById('sso-print-year')?.textContent || '';
+  container.innerHTML = buildSsoPrintPageHtml({
+    rows: state.ssoRows,
+    monthFull,
+    yearFull,
+  });
+}
+
 async function saveSsoReport() {
   try {
     const saved = await api('/api/sso-payroll', {
@@ -2118,6 +2152,220 @@ function printSsoReport() {
   renderSsoPrintPages();
   setPrintPageOrientation('landscape');
   document.title = getActivePrintDocumentTitle();
+  window.print();
+}
+
+/* ==================== COMBINED 3-IN-1 MONTHLY PDF ==================== */
+function getPeriodForVatState() {
+  const y = Number(state.vatCache?.yearFull || state.vatActiveYear || 0);
+  let m = THAI_MONTHS_FULL.indexOf(state.vatCache?.monthFull || '') + 1;
+  if (!m && state.vatCache?.monthShort) {
+    m = THAI_MONTHS.indexOf(state.vatCache.monthShort) + 1;
+  }
+  if (!m) {
+    const domMonth = String(document.getElementById('vat-print-month')?.textContent || '').trim();
+    m = THAI_MONTHS_FULL.indexOf(domMonth) + 1;
+  }
+  return { yearBe: y, monthNum: m };
+}
+
+function getDefaultPeriodForCombinedModal() {
+  const todayIso = getTodayIso();
+  const [nowY, nowM] = todayIso.split('-').map(Number);
+  let yearBe = nowY + 543;
+  let monthNum = nowM;
+
+  if (state.activeTab === 'vat') {
+    const p = getPeriodForVatState();
+    if (p.yearBe > 2400) yearBe = p.yearBe;
+    if (p.monthNum >= 1 && p.monthNum <= 12) monthNum = p.monthNum;
+  } else if (state.activeTab === 'gta') {
+    if (state.gtaYearBe > 2400) yearBe = state.gtaYearBe;
+    if (state.gtaMonthNum >= 1 && state.gtaMonthNum <= 12) monthNum = state.gtaMonthNum;
+  } else if (state.activeTab === 'sso') {
+    if (state.ssoYearBe > 2400) yearBe = state.ssoYearBe;
+    if (state.ssoMonthNum >= 1 && state.ssoMonthNum <= 12) monthNum = state.ssoMonthNum;
+  }
+  return { yearBe, monthNum };
+}
+
+function openCombinedPdfModal() {
+  const { yearBe, monthNum } = getDefaultPeriodForCombinedModal();
+  const mShort = THAI_MONTHS[monthNum - 1] || '';
+  const yShort = String(yearBe).slice(-2);
+  const defaultTitle = ['เอกสารประจำเดือน', mShort, yShort].filter(Boolean).join(' ');
+
+  openModal(
+    'รวม 3 เอกสารประจำเดือน (PDF เดียว)',
+    `
+    <div class="info-banner">
+      เลือกเดือนและเอกสารที่ต้องการรวมพิมพ์เป็นไฟล์ PDF เดียวกัน (แนวตั้งสำหรับรายงานภาษีขายและตารางราคาสมาคมฯ • แนวนอนสำหรับประกันสังคม)
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>ประจำเดือน</label>
+        <select id="combined-month-select" onchange="loadCombinedPdfPreview()"></select>
+      </div>
+      <div class="form-group">
+        <label>ปี พ.ศ.</label>
+        <select id="combined-year-select" onchange="loadCombinedPdfPreview()"></select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>เลือกเอกสารที่ต้องการรวม (จัดหน้าแนวตั้ง/แนวนอนอัตโนมัติ)</label>
+      <div style="display:grid;gap:8px;margin-top:4px;">
+        <label style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid #e6dfd1;border-radius:8px;cursor:pointer;font-weight:400;">
+          <span><input type="checkbox" id="combined-inc-vat" checked /> 1. รายงานภาษีขาย (A4 แนวตั้ง)</span>
+          <span class="muted" id="combined-status-vat">กำลังโหลด...</span>
+        </label>
+        <label style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid #e6dfd1;border-radius:8px;cursor:pointer;font-weight:400;">
+          <span><input type="checkbox" id="combined-inc-gta" checked /> 2. ตารางราคาสมาคมค้าทองคำ (A4 แนวตั้ง)</span>
+          <span class="muted" id="combined-status-gta">กำลังโหลด...</span>
+        </label>
+        <label style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid #e6dfd1;border-radius:8px;cursor:pointer;font-weight:400;">
+          <span><input type="checkbox" id="combined-inc-sso" checked /> 3. ประกันสังคม — ทะเบียนจ่ายเงินเดือน (A4 แนวนอน)</span>
+          <span class="muted" id="combined-status-sso">กำลังโหลด...</span>
+        </label>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>ชื่อไฟล์เมื่อ Save as PDF</label>
+      <input type="text" id="combined-pdf-filename" value="${esc(defaultTitle)}" oninput="this.dataset.userEdited='1'" />
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;flex-wrap:wrap;">
+      <button type="button" class="btn btn-outline" onclick="closeModal()">ยกเลิก</button>
+      <button type="button" class="btn btn-gold" id="combined-print-btn" onclick="printCombinedMonthlyPdf()">สั่งพิมพ์รวมเป็น PDF เดียว</button>
+    </div>
+  `
+  );
+
+  populateBeYearMonthSelectors('combined-month-select', 'combined-year-select', yearBe, monthNum);
+  loadCombinedPdfPreview();
+}
+
+async function loadCombinedPdfPreview() {
+  const yearBe = Number(document.getElementById('combined-year-select')?.value || 0);
+  const monthNum = Number(document.getElementById('combined-month-select')?.value || 0);
+  const btn = document.getElementById('combined-print-btn');
+  if (btn) btn.disabled = true;
+
+  try {
+    const d = await api(`/api/monthly-bundle?year=${encodeURIComponent(yearBe)}&month_num=${encodeURIComponent(monthNum)}`);
+
+    // Overlay unsaved live edits if the selected period matches what is open in a tab
+    const vatStatePeriod = getPeriodForVatState();
+    let vatRows = d.vat?.rows || [];
+    if (state.vatRows.length > 0 && vatStatePeriod.yearBe === d.yearBe && vatStatePeriod.monthNum === d.monthNum) {
+      vatRows = state.vatRows;
+    }
+
+    let gtaRows = d.gta?.rows || [];
+    if (state.gtaRows.length > 0 && state.gtaYearBe === d.yearBe && state.gtaMonthNum === d.monthNum) {
+      gtaRows = state.gtaRows;
+    }
+
+    let ssoRows = d.sso?.rows || [];
+    if (state.ssoRows.length > 0 && state.ssoYearBe === d.yearBe && state.ssoMonthNum === d.monthNum) {
+      ssoRows = state.ssoRows;
+    }
+
+    state.combinedBundle = {
+      yearBe: d.yearBe,
+      monthNum: d.monthNum,
+      monthFull: d.monthFull,
+      monthShort: d.monthShort,
+      yearFull: d.yearFull,
+      yearShort: d.yearShort,
+      vatRows,
+      gtaRows,
+      ssoRows,
+    };
+
+    const stVat = document.getElementById('combined-status-vat');
+    const stGta = document.getElementById('combined-status-gta');
+    const stSso = document.getElementById('combined-status-sso');
+    if (stVat) stVat.textContent = vatRows.length > 0 ? `${vatRows.length} รายการ` : '0 รายการ (หน้าว่าง)';
+    const gtaPriceDays = gtaRows.filter((r) => Number(r.bar_buy) > 0 || Number(r.orn_buy) > 0).length;
+    const gtaClosedDays = gtaRows.filter((r) => String(r.note || '').trim() === 'ปิด').length;
+    if (stGta) stGta.textContent = `${gtaRows.length} วัน (มีราคา ${gtaPriceDays} วัน${gtaClosedDays ? `, ปิด ${gtaClosedDays}` : ''})`;
+    const ssoFilled = ssoRows.filter((r) => String(r.employee_name || '').trim() || Number(r.total_income) > 0 || Number(r.salary) > 0).length;
+    if (stSso) stSso.textContent = ssoFilled > 0 ? `${ssoRows.length} แถว (กรอกแล้ว ${ssoFilled})` : `${ssoRows.length} แถวว่าง`;
+
+    const fnInput = document.getElementById('combined-pdf-filename');
+    if (fnInput && fnInput.dataset.userEdited !== '1') {
+      fnInput.value = ['เอกสารประจำเดือน', d.monthShort, d.yearShort].filter(Boolean).join(' ');
+    }
+  } catch (err) {
+    toast('โหลดข้อมูลรวม 3 เอกสารไม่สำเร็จ: ' + err.message, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function printCombinedMonthlyPdf() {
+  if (!state.combinedBundle) {
+    await loadCombinedPdfPreview();
+  }
+  const b = state.combinedBundle;
+  if (!b) return;
+
+  const incVat = Boolean(document.getElementById('combined-inc-vat')?.checked);
+  const incGta = Boolean(document.getElementById('combined-inc-gta')?.checked);
+  const incSso = Boolean(document.getElementById('combined-inc-sso')?.checked);
+  if (!incVat && !incGta && !incSso) {
+    toast('กรุณาเลือกอย่างน้อย 1 เอกสาร', 'error');
+    return;
+  }
+
+  const hideRepeatDate = document.getElementById('vat-hide-repeat-date')
+    ? Boolean(document.getElementById('vat-hide-repeat-date').checked)
+    : true;
+  const showTotal = document.getElementById('vat-show-total-row')
+    ? Boolean(document.getElementById('vat-show-total-row').checked)
+    : true;
+
+  const chunks = [];
+  if (incVat) {
+    chunks.push(
+      buildVatPrintPagesHtml({
+        rows: b.vatRows,
+        monthFull: b.monthFull,
+        yearFull: b.yearFull,
+        hideRepeatDate,
+        showTotal,
+      })
+    );
+  }
+  if (incGta) {
+    chunks.push(
+      buildGtaPrintPageHtml({
+        rows: b.gtaRows,
+        monthFull: b.monthFull,
+        yearFull: b.yearFull,
+      })
+    );
+  }
+  if (incSso) {
+    chunks.push(
+      buildSsoPrintPageHtml({
+        rows: b.ssoRows,
+        monthFull: b.monthFull,
+        yearFull: b.yearFull,
+      })
+    );
+  }
+
+  const container = document.getElementById('combined-print-pages');
+  if (!container) return;
+  container.innerHTML = chunks.join('');
+
+  const customName = String(document.getElementById('combined-pdf-filename')?.value || '').trim();
+  const fallbackName = ['เอกสารประจำเดือน', b.monthShort, b.yearShort].filter(Boolean).join(' ');
+
+  closeModal();
+  document.body.classList.add('printing-combined');
+  setPrintPageOrientation(!incVat && !incGta && incSso ? 'landscape' : 'portrait');
+  document.title = customName || fallbackName || DEFAULT_PAGE_TITLE;
   window.print();
 }
 

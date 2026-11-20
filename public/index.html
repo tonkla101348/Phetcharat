@@ -246,6 +246,7 @@
               <button type="button" class="btn btn-outline" onclick="addVatReportRow()">+ เพิ่มแถว</button>
               <button type="button" class="btn btn-primary" onclick="saveVatReport()">บันทึกรายงานภาษีขาย</button>
               <button type="button" class="btn btn-gold" onclick="printVatReport()">สั่งพิมพ์รายงานภาษีขาย (A4)</button>
+              <button type="button" class="btn btn-outline" onclick="openCombinedPdfModal()">รวม 3 เอกสาร (PDF เดียว)</button>
             </div>
           </div>
           <div style="padding:8px 16px;display:flex;gap:18px;align-items:center;flex-wrap:wrap;border-top:1px solid #f0ebe1;font-size:12.5px;">
@@ -315,6 +316,7 @@
               <button type="button" class="btn btn-emerald" id="gta-fetch-btn" onclick="refreshGtaPrices()">ดึงราคาสมาคมฯ ล่าสุด</button>
               <button type="button" class="btn btn-primary" onclick="saveGtaReport()">บันทึกตารางราคา</button>
               <button type="button" class="btn btn-gold" onclick="printGtaReport()">สั่งพิมพ์ตารางราคา (A4)</button>
+              <button type="button" class="btn btn-outline" onclick="openCombinedPdfModal()">รวม 3 เอกสาร (PDF เดียว)</button>
             </div>
           </div>
           <div style="padding:8px 16px;border-top:1px solid #f0ebe1;font-size:12.5px;">
@@ -374,6 +376,7 @@
               <button type="button" class="btn btn-outline" onclick="addSsoRow()">+ เพิ่มแถว</button>
               <button type="button" class="btn btn-primary" onclick="saveSsoReport()">บันทึกประกันสังคม</button>
               <button type="button" class="btn btn-gold" onclick="printSsoReport()">สั่งพิมพ์ (A4 แนวนอน)</button>
+              <button type="button" class="btn btn-outline" onclick="openCombinedPdfModal()">รวม 3 เอกสาร (PDF เดียว)</button>
             </div>
           </div>
           <div style="padding:8px 16px;border-top:1px solid #f0ebe1;font-size:12.5px;">
@@ -602,6 +605,8 @@
       </section>
     </main>
   </div>
+
+  <div id="combined-print-pages" class="combined-print-pages"></div>
 
   <!-- ==================== MODALS ==================== -->
   <div id="modal-backdrop" class="modal-backdrop hidden" onclick="closeModalIfBackdrop(event)">

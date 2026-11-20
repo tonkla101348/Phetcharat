@@ -2063,6 +2063,43 @@ function saveSsoPayrollReport(yearBe, monthNum, rowsInput) {
   return getSsoPayrollReport(targetYearBe, targetMonthNum);
 }
 
+function getVatRowsForYearMonth(yearBe, monthNum) {
+  initSchema();
+  const y = Number(yearBe) || 2569;
+  const m = Number(monthNum) || 1;
+  const targetOrder = y * 100 + m;
+
+  let monthKey = '';
+  const accRow = db.prepare('SELECT month_key FROM account_months WHERE month_order = ? LIMIT 1').get(targetOrder);
+  if (accRow && accRow.month_key) {
+    monthKey = accRow.month_key;
+  } else {
+    const distinctMonths = db.prepare('SELECT DISTINCT month_key FROM vat_sales_rows').all();
+    for (const dm of distinctMonths) {
+      if (getMonthOrderForKey(dm.month_key) === targetOrder) {
+        monthKey = dm.month_key;
+        break;
+      }
+    }
+  }
+
+  const totals = { sale_amount: 0, exempt_base: 0, taxable_base: 0, vat_amount: 0 };
+  if (!monthKey) {
+    return { monthKey: '', rows: [], totals };
+  }
+
+  const rows = db
+    .prepare('SELECT * FROM vat_sales_rows WHERE month_key = ? ORDER BY row_order ASC, date_iso ASC, id ASC')
+    .all(monthKey);
+  for (const r of rows) {
+    totals.sale_amount = round2(totals.sale_amount + (Number(r.sale_amount) || 0));
+    totals.exempt_base = round2(totals.exempt_base + (Number(r.exempt_base) || 0));
+    totals.taxable_base = round2(totals.taxable_base + (Number(r.taxable_base) || 0));
+    totals.vat_amount = round2(totals.vat_amount + (Number(r.vat_amount) || 0));
+  }
+  return { monthKey, rows, totals };
+}
+
 function addAccountEntry(input) {
   return insertAccountEntryInternal(input);
 }
@@ -2459,6 +2496,7 @@ module.exports = {
   getAnnualOverview,
   calcGoldExemptBase,
   getVatSalesReport,
+  getVatRowsForYearMonth,
   saveVatSalesReport,
   upsertGoldDailyPrices,
   getGoldDailyPricesForMonth,

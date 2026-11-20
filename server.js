@@ -221,6 +221,47 @@ async function handleApi(req, res, parsedUrl) {
     return sendJson(res, 200, { ok: true, data: saved });
   }
 
+  if (method === 'GET' && pathname === '/api/monthly-bundle') {
+    const todayIso = dbMod.getTodayIsoBangkok();
+    const [nowYearCe, nowMonth] = todayIso.split('-').map(Number);
+    const yearBe = Number(parsedUrl.searchParams.get('year') || 0) || nowYearCe + 543;
+    const monthNum = Number(parsedUrl.searchParams.get('month_num') || 0) || nowMonth;
+
+    let fetchedPrices = {};
+    let warning = '';
+    try {
+      const gp = await goldPriceMod.fetchAndCacheMonthGoldPrices({
+        yearBe,
+        monthNum,
+        forceRefresh: false,
+      });
+      fetchedPrices = gp.prices || {};
+      warning = gp.warning || '';
+    } catch (err) {
+      warning = err.message || 'ไม่สามารถดึงราคาทองคำจากเว็บได้';
+    }
+
+    const vat = dbMod.getVatRowsForYearMonth(yearBe, monthNum);
+    const gta = dbMod.getGtaPriceReport(yearBe, monthNum, fetchedPrices, false);
+    const sso = dbMod.getSsoPayrollReport(yearBe, monthNum);
+
+    return sendJson(res, 200, {
+      ok: true,
+      data: {
+        yearBe,
+        yearCe: yearBe - 543,
+        monthNum,
+        monthFull: sso.monthFull,
+        monthShort: sso.monthShort,
+        yearFull: sso.yearFull,
+        yearShort: sso.yearShort,
+        vat,
+        gta: { ...gta, warning },
+        sso,
+      },
+    });
+  }
+
   if (method === 'POST' && pathname === '/api/account/entry') {
     const body = await parseJsonBody(req);
     const entry = dbMod.addAccountEntry(body);
